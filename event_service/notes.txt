@@ -1,0 +1,22 @@
+   Notes about our event service 
+It's purpose is to capture events issued by the controller
+and get the events displayed on the real-time monitor display.
+
+To build:
+  cd ~/fsbhoa_ac/event_service
+  go build 
+
+To run manually:
+  ./event_service
+
+Check the status:
+sudo systemctl status fsbhoa-event.service
+
+View its logs:
+sudo journalctl -u fsbhoa-event.service -f
+
+Stop the service:
+sudo systemctl stop fsbhoa-event.service
+
+Restart the service:
+sudo systemctl restart fsbhoa-event.service
