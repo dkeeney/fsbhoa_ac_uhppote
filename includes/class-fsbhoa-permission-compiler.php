@@ -140,8 +140,11 @@ class Fsbhoa_Permission_Compiler {
 
         // Cards & Memberships
         $this->raw_data['cards'] = $wpdb->get_results("
-            SELECT id, rfid_id, card_status FROM ac_cardholders 
-            WHERE card_status IN ('active', 'disabled') AND rfid_id != ''
+            SELECT ch.id, cred.credential_value AS rfid_id, cred.status AS card_status, cred.issue_date AS card_issue_date, cred.expiration_date AS card_expiry_date
+            FROM ac_cardholders ch
+            INNER JOIN ac_credentials cred ON ch.id = cred.cardholder_id
+            WHERE cred.credential_type = 'MIFARE_BADGE'
+            AND cred.status IN ('active', 'disabled')
         ");
         
         $memberships = $wpdb->get_results("SELECT cardholder_id, group_id FROM ac_cardholder_groups");

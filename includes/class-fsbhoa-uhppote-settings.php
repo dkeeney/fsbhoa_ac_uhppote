@@ -21,7 +21,7 @@ class Fsbhoa_Uhppote_Settings {
 
     public function add_submenu() {
         // Hook into the Core's main menu slug 'fsbhoa_ac_main_menu'
-        add_submenu_page('fsbhoa_ac_main_menu', 'Event Service Config', 'Event Service', 'manage_options', $this->page_slug, [$this, 'render_page']);
+        add_submenu_page('fsbhoa_ac_main_menu', 'Event Service Config', 'Event Service', 'manage_options', $this->page_slug, [$this, 'render_page'],12);
     }
 
     public function register_settings() {

@@ -4,7 +4,7 @@
 if (!defined('WPINC')) { die; }
 
 require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php';
-require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/uhppote/fsbhoa-uhppote-bulk-sync.php';
+require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-bulk-sync.php';
 
 add_action('fsbhoa_run_background_sync', 'fsbhoa_perform_delta_sync');
 add_action('fsbhoa_run_nightly_rebuild', 'fsbhoa_perform_nightly_rebuild_sync');
@@ -28,7 +28,13 @@ function fsbhoa_perform_delta_sync() {
     $active_schedule_id = fsbhoa_get_active_schedule_id();
     $permission_data = fsbhoa_get_all_permission_data($active_schedule_id);
 
-    $cardholders_to_sync = $wpdb->get_results("SELECT * FROM ac_cardholders WHERE card_status IN ('active', 'disabled')");
+    $cardholders_to_sync = $wpdb->get_results("
+        SELECT ch.*, cred.credential_value AS rfid_id, cred.status AS card_status, cred.issue_date AS card_issue_date, cred.expiration_date AS card_expiry_date
+        FROM ac_cardholders ch
+        INNER JOIN ac_credentials cred ON ch.id = cred.cardholder_id
+        WHERE cred.credential_type = 'MIFARE_BADGE'
+        AND cred.status IN ('active', 'disabled')
+    ");
 
 
     // Get the controllers
@@ -63,7 +69,13 @@ function fsbhoa_perform_nightly_rebuild_sync( $wipe_memory = true ) {
     $active_schedule_id = fsbhoa_get_active_schedule_id();
     error_log("NIGHTLY REBUILD: Determined active schedule ID is: " . $active_schedule_id);
     $permission_data = fsbhoa_get_all_permission_data($active_schedule_id);
-    $cardholders_to_sync = $wpdb->get_results("SELECT * FROM ac_cardholders WHERE card_status IN ('active', 'disabled')");
+    $cardholders_to_sync = $wpdb->get_results("
+        SELECT ch.*, cred.credential_value AS rfid_id, cred.status AS card_status, cred.issue_date AS card_issue_date, cred.expiration_date AS card_expiry_date
+        FROM ac_cardholders ch
+        INNER JOIN ac_credentials cred ON ch.id = cred.cardholder_id
+        WHERE cred.credential_type = 'MIFARE_BADGE'
+        AND cred.status IN ('active', 'disabled')
+    ");
     $controllers = $wpdb->get_results("SELECT * FROM ac_controllers WHERE type = 'UHPPOTE'");
 
     fsbhoa_execute_sync_logic(
@@ -90,6 +102,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
     $retry_attempts = 3;
     $retry_wait = 250000;
     $global_sync_failed = false;
+
 
     // --- STEP 1: COMPILE PERMISSIONS ---
     if (FSBHOA_DEBUG_MODE) { 
@@ -129,114 +142,139 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
             if (FSBHOA_DEBUG_MODE) error_log("SYNC SERVICE: Controller '$friendly_name' ($device_id) is offline. Skipping.");
             continue;
         }
+        // === CREATE CONTROLLER-SPECIFIC LOCK ===
+        $lock_file = "/tmp/fsbhoa_sync_active_{$device_id}.lock";
+        file_put_contents($lock_file, time());
+        try {
+            if (!$is_dry_run) { 
+                shell_exec(sprintf('uhppote-cli set-time %s 2>&1', $device_id)); 
 
-        if (!$is_dry_run) { shell_exec(sprintf('uhppote-cli set-time %s 2>&1', $device_id)); }
-
-        // --- STEP 3: WIPE MEMORY (Only on Nightly or Manual Full Sync) ---
-        if ($wipe_memory) {
-            error_log("SYNC SERVICE: Wiping card & profile memory on $friendly_name...");
-            if (!$is_dry_run) {
-                shell_exec(sprintf('uhppote-cli clear-time-profiles %s 2>&1', $device_id));
-                // we are relying on the bulk update to do the job for cards.
-                // shell_exec(sprintf('uhppote-cli delete-all %s 2>&1', $device_id));
-                $wpdb->delete('ac_sync_hashes', ['device_id' => $device_id]);   // clear only one controller.
-                sleep(1);
-            } else {
-                error_log("DRY RUN: Would execute clear-time-profiles and delete-cards on " . $device_id);
-            }
-        }
-
-        // --- STEP 4: UPLOAD TIME PROFILES ---
-        // We always push profiles. If the hours changed, this updates the "stable" ID.
-        $profiles_to_write = $global_profiles[$device_id] ?? [];
-        if (!empty($profiles_to_write)) {
-            foreach ($profiles_to_write as $profile_id => $data) {
-                $parts = explode('|', $data['content']);
-                $weekdays = $parts[0];
-                $spans_string = "'" . $parts[1] . "'";
-                $linked_profile_id = intval($data['link']);
-
-                $command = sprintf("uhppote-cli set-time-profile %s %d %s %s %s %d",
-                    $device_id, $profile_id, '2020-01-01:2099-12-31', $weekdays, $spans_string, $linked_profile_id
-                );
-
-                if ($is_dry_run) {
-                    error_log("DRY RUN (PROFILE): " . $command);
+                 // === ENFORCE EVENT LISTENER ===
+                $callback_host = get_option('fsbhoa_ac_callback_host', '');
+                $listen_port   = get_option('fsbhoa_ac_listen_port', '60002');
+                
+                if (!empty($callback_host)) {
+                    $listener_address = $callback_host . ':' . $listen_port;
+                    $listener_cmd = sprintf('uhppote-cli set-listener %s %s 2>&1', escapeshellarg($device_id), escapeshellarg($listener_address));
+                    shell_exec($listener_cmd);
+                    error_log("SYNC SERVICE: Enforced listener to $listener_address for $friendly_name.");
                 } else {
-                    error_log("SYNC SERVICE (PROFILE): $command");
-                    $success = false;
-                    for ($i = 0; $i < $retry_attempts; $i++) {
-                        $output = shell_exec($command . " 2>&1");
-                        if (strpos($output, 'false') === false && strpos($output, 'ERROR') === false) {
-                            $success = true; break;
-                        }
-                        usleep($retry_wait);
-                    }
-                    if (!$success) {
-                        error_log("SYNC FAILED (PROFILE $profile_id) for $friendly_name: $output");
-                        $global_sync_failed = true;
-                    }
+                    error_log("SYNC WARNING: Event Callback Host IP is empty. Skipping set-listener.");
                 }
-                if (!$is_dry_run) usleep(200000); 
             }
-        }
-        // --- STEP 5: SYNC DOOR DELAYS (NIGHTLY REBUILD ONLY) ---
-        error_log("SYNC SERVICE: Setting door unlock durations for $friendly_name...");
-            
-        $doors_query = $wpdb->prepare(
-            "SELECT door_number_on_controller, door_delay 
-             FROM ac_doors 
-             WHERE controller_record_id = %d",
-            $controller->controller_record_id
-        );
-        $doors = $wpdb->get_results($doors_query);
 
-        if ($doors) {
-            foreach ($doors as $door) {
-                $door_num = $door->door_number_on_controller;
-                // Ensure delay is valid (default to 3 if missing or out of bounds)
-                $delay = (isset($door->door_delay) && $door->door_delay > 0 && $door->door_delay <= 60) ? intval($door->door_delay) : 3;
-
-                $delay_cmd = sprintf(
-                    "uhppote-cli set-door-delay %s %d %d 2>&1",
-                    escapeshellarg($device_id),
-                    $door_num,
-                    $delay
-                );
-
-                if ($is_dry_run) {
-                    error_log("DRY RUN (DELAY): " . $delay_cmd);
+            // --- STEP 3: WIPE MEMORY (Only on Nightly or Manual Full Sync) ---
+            if ($wipe_memory) {
+                error_log("SYNC SERVICE: Wiping card & profile memory on $friendly_name...");
+                if (!$is_dry_run) {
+                    shell_exec(sprintf('uhppote-cli clear-time-profiles %s 2>&1', $device_id));
+                    // we are relying on the bulk update to do the job for cards.
+                    // shell_exec(sprintf('uhppote-cli delete-all %s 2>&1', $device_id));
+                    $wpdb->delete('ac_sync_hashes', ['device_id' => $device_id]);   // clear only one controller.
+                    sleep(1);
                 } else {
-                    $output = shell_exec($delay_cmd);
-                    if (strpos($output, 'ERROR') !== false) {
-                        error_log("SYNC FAILED (DELAY) for Door $door_num on $device_id: " . trim($output));
+                    error_log("DRY RUN: Would execute clear-time-profiles and delete-cards on " . $device_id);
+                }
+            }
+
+            // --- STEP 4: UPLOAD TIME PROFILES ---
+            // We always push profiles. If the hours changed, this updates the "stable" ID.
+            $profiles_to_write = $global_profiles[$device_id] ?? [];
+            if (!empty($profiles_to_write)) {
+                foreach ($profiles_to_write as $profile_id => $data) {
+                    $parts = explode('|', $data['content']);
+                    $weekdays = $parts[0];
+                    $spans_string = "'" . $parts[1] . "'";
+                    $linked_profile_id = intval($data['link']);
+    
+                    $command = sprintf("uhppote-cli set-time-profile %s %d %s %s %s %d",
+                        $device_id, $profile_id, '2020-01-01:2099-12-31', $weekdays, $spans_string, $linked_profile_id
+                    );
+
+                    if ($is_dry_run) {
+                        error_log("DRY RUN (PROFILE): " . $command);
                     } else {
-                        error_log("SYNC SERVICE (DELAY): Door $door_num set to $delay seconds.");
+                        error_log("SYNC SERVICE (PROFILE): $command");
+                        $success = false;
+                        for ($i = 0; $i < $retry_attempts; $i++) {
+                            $output = shell_exec($command . " 2>&1");
+                            if (strpos($output, 'false') === false && strpos($output, 'ERROR') === false) {
+                                $success = true; break;
+                            }
+                            usleep($retry_wait);
+                        }
+                        if (!$success) {
+                            error_log("SYNC FAILED (PROFILE $profile_id) for $friendly_name: $output");
+                            $global_sync_failed = true;
+                        }
                     }
-                    usleep(100000); // 100ms hardware safety buffer
+                    if (!$is_dry_run) usleep(200000); 
                 }
             }
+            // --- STEP 5: SYNC DOOR DELAYS (NIGHTLY REBUILD ONLY) ---
+            error_log("SYNC SERVICE: Setting door unlock durations for $friendly_name...");
+            
+            $doors_query = $wpdb->prepare(
+                "SELECT door_number_on_controller, door_delay 
+                 FROM ac_doors 
+                 WHERE controller_record_id = %d",
+                $controller->controller_record_id
+            );
+            $doors = $wpdb->get_results($doors_query);
+
+            if ($doors) {
+                foreach ($doors as $door) {
+                    $door_num = $door->door_number_on_controller;
+                    // Ensure delay is valid (default to 3 if missing or out of bounds)
+                    $delay = (isset($door->door_delay) && $door->door_delay > 0 && $door->door_delay <= 60) ? intval($door->door_delay) : 3;
+
+                    $delay_cmd = sprintf(
+                        "uhppote-cli set-door-delay %s %d %d 2>&1",
+                        escapeshellarg($device_id),
+                        $door_num,
+                        $delay
+                    );
+
+                    if ($is_dry_run) {
+                        error_log("DRY RUN (DELAY): " . $delay_cmd);
+                    } else {
+                        $output = shell_exec($delay_cmd);
+                        if (strpos($output, 'ERROR') !== false) {
+                            error_log("SYNC FAILED (DELAY) for Door $door_num on $device_id: " . trim($output));
+                        } else {
+                            error_log("SYNC SERVICE (DELAY): Door $door_num set to $delay seconds.");
+                        }
+                        usleep(100000); // 100ms hardware safety buffer
+                    }
+                }
+            }
+
+            // --- STEP 6: UPLOAD/UPDATE CARDS ---
+            $bulk_sync = new Fsbhoa_Uhppote_Bulk_Sync();
+            $bulk_success = $bulk_sync->execute_bulk_load(
+                $device_id,
+                $controller->controller_record_id,
+                $cardholders_to_sync,
+                $global_card_perms,
+                $is_dry_run
+            );
+
+            if (!$bulk_success) {
+                $global_sync_failed = true;
+            }
+
+
+            // --- STEP 7: SYNC TASKS ---
+            fsbhoa_execute_task_sync($device_id, $controller->controller_record_id, $active_schedule_id, $is_dry_run, $retry_attempts);
+
+
+        } finally {
+            // === RELEASE THE LOCK BEFORE MOVING TO NEXT CONTROLLER ===
+            if (file_exists($lock_file)) {
+                unlink($lock_file);
+                if (FSBHOA_DEBUG_MODE) error_log("SYNC SERVICE: Released lock for $friendly_name ($device_id).");
+            }
         }
-
-        // --- STEP 6: UPLOAD/UPDATE CARDS ---
-        $bulk_sync = new Fsbhoa_Uhppote_Bulk_Sync();
-        $bulk_success = $bulk_sync->execute_bulk_load(
-            $device_id,
-            $controller->controller_record_id,
-            $cardholders_to_sync,
-            $global_card_perms,
-            $is_dry_run
-        );
-
-        if (!$bulk_success) {
-            $global_sync_failed = true;
-        }
-
-
-        // --- STEP 7: SYNC TASKS ---
-        fsbhoa_execute_task_sync($device_id, $controller->controller_record_id, $active_schedule_id, $is_dry_run, $retry_attempts);
-
-
     } // End Controller Loop
 
 
@@ -248,7 +286,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
         } else {
             // Success: Clear the pending changes table to remove the GUI banner
             $wpdb->query("DELETE FROM ac_pending_changes");
-            
+           
             $final_message = "sync complete.";
             set_transient('fsbhoa_sync_status', ['status' => 'complete', 'message' => $final_message], MINUTE_IN_SECONDS * 5);
             

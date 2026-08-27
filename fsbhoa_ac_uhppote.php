@@ -33,9 +33,9 @@ function fsbhoa_uhppote_init() {
 
     // Load the Compiler and Sync Services
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/uhppote/fsbhoa-uhppote-discovery.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/uhppote/fsbhoa-uhppote-bulk-sync.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/uhppote/fsbhoa-uhppote-sync-service.php';
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-discovery.php';
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-bulk-sync.php';
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-sync-service.php';
 
     // Load the Controller UI and Actions
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/controller/class-fsbhoa-controller-admin-page.php';

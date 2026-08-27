@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/uhppoted/uhppote-core/types"
@@ -33,6 +34,22 @@ func runPoll(u uhppote.IUHPPOTE) {
 	serialsLock.RUnlock()
 
 	for sn, info := range currentControllers {
+		// ===  CHECK CONTROLLER-SPECIFIC LOCK WITH TIMEOUT ===
+		lockFile := fmt.Sprintf("/tmp/fsbhoa_sync_active_%d.lock", sn)
+
+		if fileInfo, err := os.Stat(lockFile); err == nil {
+			// The lock exists. Check how old it is.
+			if time.Since(fileInfo.ModTime()) > 5*time.Minute {
+				// Lock is older than 5 minutes (stale/orphaned).
+				// Delete it and continue polling normally.
+				// log.Printf("POLLER: Stale lock found for %d, removing it.", sn)
+				os.Remove(lockFile)
+			} else {
+				// Lock is fresh. A sync is actively happening. Skip polling.
+				continue
+			}
+		}
+
 		// Loop through the doors configured for this specific controller.
 		for _, door := range info.Doors {
 			status := getDoorStatus(u, sn, door.Number)
@@ -99,4 +116,3 @@ func sendGateStatusToMonitor(doorRecordID int, status string) {
 		log.Printf("ERROR POLLER: Monitor service returned non-200 status: %s", resp.Status)
 	}
 }
-

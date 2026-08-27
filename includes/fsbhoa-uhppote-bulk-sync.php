@@ -127,20 +127,38 @@ class Fsbhoa_Uhppote_Bulk_Sync {
             error_log("SYNC SERVICE: Running bulk load-acl for {$device_id}...");
 
             // The Self-Healing Retry Loop (Attempts up to 3 times)
+            // The Intelligent Self-Healing Retry Loop (Attempts up to 3 times)
             for ($attempt = 1; $attempt <= 3; $attempt++) {
+                error_log("SYNC SERVICE: Executing bulk load-acl (Attempt {$attempt}/3) for {$device_id}...");
                 $output = shell_exec($bulk_command);
 
+                // Check for errors, dropped packets, or corruption warnings
                 if (strpos($output, 'ERROR') !== false
                     || preg_match('/failed:[1-9]/', $output)
-                    || preg_match('/errors:[1-9]/', $output)) {
+                    || preg_match('/errors:[1-9]/', $output)
+                    || strpos($output, 'invalid BCD') !== false
+                    || strpos($output, 'invalid MsgType') !== false) {
 
                     $clean_output = trim(preg_replace('/\s+/', ' ', $output));
-                    error_log("SYNC WARNING: Bulk ACL attempt $attempt for {$device_id} had dropped packets: {$clean_output}");
+                    error_log("SYNC WARNING: Bulk ACL attempt {$attempt} for {$device_id} had issues: {$clean_output}");
 
                     if ($attempt < 3) {
-                        error_log("SYNC SERVICE: Retrying Delta push for {$device_id} in 3 seconds...");
-                        sleep(3); // Wait for the network to clear its throat
-                        continue; // Loop back and try again
+                        // === NEW: HARDWARE CORRUPTION RECOVERY ===
+                        if (strpos($output, 'invalid BCD') !== false || strpos($output, 'invalid MsgType') !== false) {
+                            error_log("SYNC RECOVERY: Corrupted memory detected on {$device_id}. Initiating wipe (delete-all)...");
+
+                            // Nuke the board's card memory
+                            shell_exec(sprintf('uhppote-cli delete-all %s 2>&1', escapeshellarg($device_id)));
+
+                            // Give the cheap flash memory time to erase sectors and rebuild its index
+                            error_log("SYNC RECOVERY: Waiting 15 seconds for flash memory format to complete...");
+                            sleep(15);
+                        } else {
+                            // Standard network hiccup recovery
+                            error_log("SYNC SERVICE: Retrying Delta push for {$device_id} in 3 seconds...");
+                            sleep(3);
+                        }
+                        continue; // Loop back and try the load-acl command again
                     } else {
                         error_log("SYNC FATAL (BULK ACL): Failed after 3 attempts for {$device_id}.");
                         $success = false;
