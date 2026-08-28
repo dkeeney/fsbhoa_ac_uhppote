@@ -137,12 +137,34 @@ class Fsbhoa_Uhppote_Hardware_UI {
         return $status_map;
     }
 
+    // used by regression test routines.
     public function simulate_hardware_event($handled) {
         global $wpdb;
-        $serial_number = $wpdb->get_var("SELECT uhppoted_device_id FROM ac_controllers ORDER BY controller_record_id ASC LIMIT 1");
 
-        if (empty($serial_number)) {
-            return new WP_Error('no_controllers', 'No UHPPOTE controllers found in the database.');
+        // 1. Look for a dedicated REGRESSION_TEST controller
+        $serial_number = $wpdb->get_var( $wpdb->prepare(
+            "SELECT uhppoted_device_id FROM ac_controllers WHERE type = %s LIMIT 1",
+            'REGRESSION_TEST'
+        ) );
+
+        // 2. If it doesn't exist yet, automatically seed it so the test is self-contained
+        if ( empty( $serial_number ) ) {
+            $wpdb->insert( 'ac_controllers', [
+                'uhppoted_device_id' => 88888888,
+                'friendly_name'      => 'Regression Test Controller',
+                'type'               => 'REGRESSION_TEST',
+            ] );
+            $controller_id = $wpdb->insert_id;
+
+            // Also seed the default door mapping (e.g., door 254 for system test unit)
+            $wpdb->insert( 'ac_doors', [
+                'controller_record_id'      => $controller_id,
+                'door_number_on_controller' => 254,
+                'friendly_name'             => 'Regression Test System Door',
+                'door_role'                 => 'KIOSK',
+            ] );
+
+            $serial_number = 88888888;
         }
 
         // Dynamically build the URL to the local Event Service
@@ -156,6 +178,7 @@ class Fsbhoa_Uhppote_Hardware_UI {
             'serial_number' => (int) $serial_number,
             'door_number'   => 254 // DOOR 254 (System Unit Test)
         ];
+        
 
         $response = wp_remote_post($url, [
             'method'    => 'POST',
@@ -175,7 +198,7 @@ class Fsbhoa_Uhppote_Hardware_UI {
         }
 
         sleep(1);
-        return "Test hardware event triggered for UHPPOTE controller SN {$serial_number}.";
+        return "Test hardware event triggered for REGRESSION_TEST controller SN {$serial_number}.";
     }
 
     // Handles unit test

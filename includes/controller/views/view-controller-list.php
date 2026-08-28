@@ -7,7 +7,7 @@ if ( ! defined( 'WPINC' ) ) { die; }
 function fsbhoa_render_controller_list_view() {
     global $wpdb;
     $table_name = 'ac_controllers';
-    $controllers = $wpdb->get_results( "SELECT * FROM {$table_name} ORDER BY friendly_name ASC", ARRAY_A );
+    $controllers = $wpdb->get_results( "SELECT * FROM {$table_name} WHERE type = 'UHPPOTE' ORDER BY friendly_name ASC", ARRAY_A );
     
     if ( $wpdb->last_error ) {
         echo '<div class="notice notice-error"><p><strong>Database Error:</strong> Could not retrieve controllers. ' . esc_html( $wpdb->last_error ) . '</p></div>';
@@ -24,20 +24,15 @@ function fsbhoa_render_controller_list_view() {
             <a href="<?php echo esc_url( add_query_arg(['view' => 'controllers', 'action' => 'add'], $current_page_url) ); ?>" class="button button-primary">
                 <?php esc_html_e( 'Add New Controller', 'fsbhoa-ac' ); ?>
             </a>
-            <?php
-                $discover_nonce = wp_create_nonce('fsbhoa_discover_controllers_nonce');
-                $discover_url = add_query_arg([
-                    'action'    => 'fsbhoa_discover_controllers',
-                    '_wpnonce'  => $discover_nonce
-                ], admin_url('admin-post.php'));
-            ?>
-            <a href="<?php echo esc_url($discover_url); ?>" class="button button-secondary" style="margin-left: 5px;">
-                <?php esc_html_e( 'Discover Controllers', 'fsbhoa-ac' ); ?>
-            </a>
+            
             <button id="fsbhoa-trigger-rebuild-button" class="button button-secondary" style="margin-left: 15px;">
                 <?php esc_html_e( 'Force Full Rebuild', 'fsbhoa-ac' ); ?>
             </button>
-
+            <!-- Instructional Note Box -->
+            <div style="display: inline-block; vertical-align: middle; margin-left: 20px; font-size: 13px; color: #50575e; background: #fff; padding: 8px 12px; border-left: 4px solid #2271b1; box-shadow: 0 1px 1px rgba(0,0,0,0.04);">
+                <strong>Note:</strong> Default factory IP setting for controllers is <code>192.168.0.0</code>. Use laptop on same LAN to set DHCP:<br>
+                <code style="margin-top: 4px; display: inline-block; background: #f0f0f1; padding: 2px 6px;">uhppote-cli set-address &lt;serial_number&gt; 0.0.0.0 0.0.0.0 0.0.0.0</code>
+            </div>
         </div>
 
         <table id="fsbhoa-controller-table" class="display" style="width:100%">
@@ -62,7 +57,7 @@ function fsbhoa_render_controller_list_view() {
                             <a href="<?php echo esc_url($edit_url); ?>" class="fsbhoa-action-icon" title="<?php esc_attr_e('Edit Controller', 'fsbhoa-ac'); ?>">
                                 <span class="dashicons dashicons-edit"></span>
                             </a>
-                            <a href="<?php echo esc_url($delete_url); ?>" class="fsbhoa-action-icon" title="<?php esc_attr_e('Delete Controller', 'fsbhoa-ac'); ?>" onclick="return confirm('Are you sure you want to delete this controller? This may also affect associated doors.');">
+                            <a href="<?php echo esc_url($delete_url); ?>" class="fsbhoa-action-icon" title="<?php esc_attr_e('Delete Controller', 'fsbhoa-ac'); ?>" onclick="return confirm('Are you sure you want to delete this controller? This will also delete all associated doors and schedules in which they are used.');">
                                 <span class="dashicons dashicons-trash"></span>
                             </a>
                         </td>
