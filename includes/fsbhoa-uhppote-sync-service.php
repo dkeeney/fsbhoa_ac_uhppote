@@ -283,6 +283,10 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
         if ($global_sync_failed) {
             set_transient('fsbhoa_sync_status', ['status' => 'failed', 'message' => 'Sync completed with errors. Check logs.'], MINUTE_IN_SECONDS * 10);
             error_log("SYNC EXECUTE: Process finished with errors. ac_pending_changes NOT cleared.");
+            // Fire the Discord push notification
+            if ( function_exists('fsbhoa_send_discord_alert') ) {
+                fsbhoa_send_discord_alert("The Nightly Rebuild process failed! The controller memory may be incomplete. Please check the error logs.");
+            }
         } else {
             // Success: Clear the pending changes table to remove the GUI banner
             $wpdb->query("DELETE FROM ac_pending_changes");

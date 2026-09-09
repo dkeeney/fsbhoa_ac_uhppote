@@ -25,39 +25,43 @@ function fsbhoa_uhppote_init() {
         return;
     }
 
-    // This is where we will require our extracted classes
-    // require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-compiler.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-group-ui.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-actions.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-ui.php';
+    // ONLY load the heavy lifting if we are in the admin dashboard, 
+    // running AJAX, or running a background Cron job
+    if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
 
-    // Load the Compiler and Sync Services
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-discovery.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-bulk-sync.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-sync-service.php';
+        // This is where we will require our extracted classes
+        // require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-compiler.php';
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-group-ui.php';
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-actions.php';
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-ui.php';
 
-    // Load the Controller UI and Actions
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/controller/class-fsbhoa-controller-admin-page.php';
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/controller/class-fsbhoa-controller-actions.php';
+        // Load the Compiler and Sync Services
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php';
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-discovery.php';
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-bulk-sync.php';
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-sync-service.php';
 
-    // Turn on the Action Handlers (so saves/deletes still work)
-    if (class_exists('Fsbhoa_Controller_Actions')) {
-        new Fsbhoa_Controller_Actions();
+        // Load the Controller UI and Actions
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-controller-admin-page.php';
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-controller-actions.php';
+
+        // Turn on the Action Handlers (so saves/deletes still work)
+        if (class_exists('Fsbhoa_Controller_Actions')) {
+            new Fsbhoa_Controller_Actions();
+        }
+        if (class_exists('Fsbhoa_Gate_Actions')) {
+            new Fsbhoa_Gate_Actions();
+        }
+
+        // Load the UI Bridge
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-hardware-ui.php';
+
+        // Load the Settings Bridge
+        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-settings.php';
+
     }
-    if (class_exists('Fsbhoa_Gate_Actions')) {
-        new Fsbhoa_Gate_Actions();
-    }
-
-    // Load the UI Bridge
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-hardware-ui.php';
-
-    // Load the Settings Bridge
-    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-settings.php';
-
     // Load Credentials
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-credentials.php';
-
 }
 
 function fsbhoa_uhppote_missing_core_notice() {
@@ -65,29 +69,49 @@ function fsbhoa_uhppote_missing_core_notice() {
 }
 
 
-function fsbhoa_uhppote_enqueue_assets() {
-    global $post;
 
-    if ( ! is_a( $post, 'WP_Post' ) ) { return; }
+// --- 1. REGISTER ADMIN MENU ---
+add_action( 'admin_menu', 'fsbhoa_uhppote_register_admin_menus' );
 
-    // Enqueue Hardware Admin JS/CSS when on the Hardware Management page
-    if ( has_shortcode( $post->post_content, 'fsbhoa_hardware_management' ) ) {
-        wp_enqueue_style('fsbhoa-controller-styles', FSBHOA_UHPPOTE_PLUGIN_DIR_URL . 'assets/css/fsbhoa-controller-styles.css', ['fsbhoa-shared-styles'], FSBHOA_UHPPOTE_VERSION);
+function fsbhoa_uhppote_register_admin_menus() {
+    // Only add the menu if the Core menu exists
+    if ( class_exists( 'Fsbhoa_Access_Service' ) ) {
+        $controller_page = new Fsbhoa_Controller_Admin_Page();
 
-        wp_enqueue_script('fsbhoa-hardware-admin', FSBHOA_UHPPOTE_PLUGIN_DIR_URL . 'assets/js/fsbhoa-hardware-admin.js', ['jquery'], FSBHOA_UHPPOTE_VERSION, true);
-        wp_localize_script('fsbhoa-hardware-admin', 'fsbhoa_hardware_vars', array(
-            'ajax_url'      => admin_url('admin-ajax.php'),
-            'discovery_nonce' => wp_create_nonce('fsbhoa_discovery_nonce'),
-            'reset_nonce'   => wp_create_nonce('fsbhoa_factory_reset_nonce'),
-            'rebuild_nonce' => wp_create_nonce('fsbhoa_rebuild_nonce')
-        ));
-    }
-
-    // Enqueue Task JS/CSS when on the Schedules page (where tasks now live)
-    if ( has_shortcode( $post->post_content, 'fsbhoa_schedules_page' ) || strpos($post->post_content, '[fsbhoa_schedules_page]') !== false ) {
-        wp_enqueue_style('fsbhoa-task-list-styles', FSBHOA_UHPPOTE_PLUGIN_DIR_URL . 'assets/css/fsbhoa-task-list-styles.css', ['fsbhoa-shared-styles'], FSBHOA_UHPPOTE_VERSION);
-        wp_enqueue_script('fsbhoa-task-list-script', FSBHOA_UHPPOTE_PLUGIN_DIR_URL . 'assets/js/fsbhoa-task-list.js', ['jquery'], FSBHOA_UHPPOTE_VERSION, true);
+        add_submenu_page(
+            'fsbhoa_ac_main_menu',             // Parent menu slug (from Core)
+            'UHPPOTE Controllers',             // Page Title
+            'UHPPOTE Controllers',             // Menu Title
+            'manage_options',                  // Capability
+            'fsbhoa-ac-uhppote-controllers',   // Menu Slug
+            array( $controller_page, 'render_page' ) // The exact render method you already have!
+        );
     }
 }
-add_action( 'wp_enqueue_scripts', 'fsbhoa_uhppote_enqueue_assets', 20 ); // Priority 20 ensures Core styles load first
 
+// --- 2. ENQUEUE ASSETS FOR THE ADMIN PAGE ---
+add_action( 'admin_enqueue_scripts', 'fsbhoa_uhppote_admin_assets' );
+
+function fsbhoa_uhppote_admin_assets( $hook ) {
+    // Only load these assets on the new UHPPOTE backend pages
+    if ( strpos( $hook, 'fsbhoa-ac-uhppote-controllers' ) !== false || strpos( $hook, 'fsbhoa-ac-uhppote-doors' ) !== false ) {
+
+        // 1. Load DataTables CSS & JS from CDN
+        wp_enqueue_style( 'datatables-css', 'https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css', [], '1.13.6' );
+        wp_enqueue_script( 'datatables-js', 'https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js', ['jquery'], '1.13.6', true );
+
+        // 2. Load your remaining plugin CSS (which contains the .form-row and .fsbhoa-actions-column styles)
+        wp_enqueue_style( 'fsbhoa-uhppote-styles', FSBHOA_UHPPOTE_PLUGIN_DIR_URL . 'assets/css/fsbhoa-task-list-styles.css', [], FSBHOA_UHPPOTE_VERSION );
+
+        // 3. Load your Hardware Admin JS (Note: Added 'datatables-js' as a dependency so it loads in the correct order)
+        wp_enqueue_script( 'fsbhoa-hardware-admin', FSBHOA_UHPPOTE_PLUGIN_DIR_URL . 'assets/js/fsbhoa-hardware-admin.js', ['jquery', 'datatables-js'], FSBHOA_UHPPOTE_VERSION, true );
+
+        // 4. Localize JS Variables for AJAX
+        wp_localize_script( 'fsbhoa-hardware-admin', 'fsbhoa_hardware_vars', array(
+            'ajax_url'        => admin_url( 'admin-ajax.php' ),
+            'discovery_nonce' => wp_create_nonce( 'fsbhoa_discovery_nonce' ),
+            'reset_nonce'     => wp_create_nonce( 'fsbhoa_factory_reset_nonce' ),
+            'rebuild_nonce'   => wp_create_nonce( 'fsbhoa_rebuild_nonce' )
+        ) );
+    }
+}

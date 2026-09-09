@@ -168,7 +168,7 @@ class Fsbhoa_Controller_Actions {
 
         $redirect_url = wp_get_referer();
         if ( ! $redirect_url ) {
-            $redirect_url = get_permalink();
+            $redirect_url = admin_url('admin.php?page=fsbhoa-ac-uhppote-controllers');
         }
 
         // This is the correct block for the delete action

@@ -13,10 +13,10 @@ function fsbhoa_render_controller_list_view() {
         echo '<div class="notice notice-error"><p><strong>Database Error:</strong> Could not retrieve controllers. ' . esc_html( $wpdb->last_error ) . '</p></div>';
     }
 
-    $current_page_url = get_permalink();
+    $current_page_url = admin_url('admin.php?page=fsbhoa-ac-uhppote-controllers');
     ?>
     <div class="fsbhoa-frontend-wrap">
-        <h1><?php esc_html_e( 'Controller Management', 'fsbhoa-ac' ); ?></h1>
+        <h1><?php esc_html_e( 'UHPPOTE Controller Management', 'fsbhoa-ac' ); ?></h1>
         <div id="fsbhoa-sync-notice-container">
         </div>
         

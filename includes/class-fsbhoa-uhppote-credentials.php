@@ -16,6 +16,7 @@ class Fsbhoa_Uhppote_Credentials {
     }
 
     public function render_rfid_fields($form_data, $is_edit_mode) {
+        //echo "<div style='background: yellow; color: black; padding: 20px; font-weight: bold; border: 3px solid red;'>DEBUG: The UHPPOTE Hook is successfully firing!</div>";
         if ($is_edit_mode && !empty($form_data['id'])) {
             global $wpdb;
             $cardholder_id = absint($form_data['id']);
@@ -52,7 +53,15 @@ class Fsbhoa_Uhppote_Credentials {
                 $results['errors']['rfid_id'] = __('RFID ID must be 8 alphanumeric characters.', 'fsbhoa-ac');
             } else {
                 // Check ac_credentials for duplicates instead of ac_cardholders
-                $is_duplicate = $wpdb->get_var($wpdb->prepare("SELECT credential_id FROM ac_credentials WHERE credential_value = %s AND cardholder_id != %d AND credential_type = 'MIFARE_BADGE'", $submitted_rfid, $cardholder_id));
+                $is_duplicate = $wpdb->get_var( $wpdb->prepare(
+                   	"SELECT id FROM ac_credentials
+	                 WHERE credential_value = %s
+	                   AND cardholder_id != %d
+	                   AND credential_type = 'MIFARE_BADGE'
+	                 LIMIT 1",
+	                $submitted_rfid,
+	                $cardholder_id
+                ) );
                 if ($is_duplicate !== null) {
                     $results['errors']['rfid_id_duplicate'] = __('This RFID ID is already assigned to another cardholder.', 'fsbhoa-ac');
                 }
@@ -92,7 +101,7 @@ class Fsbhoa_Uhppote_Credentials {
 
         // We fetch the existing record (including dates) so we can check if anything actually changed
         $existing_cred = $wpdb->get_row($wpdb->prepare(
-            "SELECT credential_id, credential_value, status, issue_date, expiration_date FROM ac_credentials WHERE cardholder_id = %d AND credential_type = 'MIFARE_BADGE'", $cardholder_id
+            "SELECT id, credential_value, status, issue_date, expiration_date FROM ac_credentials WHERE cardholder_id = %d AND credential_type = 'MIFARE_BADGE'", $cardholder_id
         ));
 
         $issue_date = $submitted_issue_date ?: current_time('Y-m-d');
@@ -103,7 +112,7 @@ class Fsbhoa_Uhppote_Credentials {
 
         if (empty($submitted_rfid)) {
             if ($existing_cred) {
-                $wpdb->delete('ac_credentials', ['credential_id' => $existing_cred->credential_id]);
+                $wpdb->delete('ac_credentials', ['id' => $existing_cred->id]);
                 $needs_sync = true;
                 $sync_action = 'delete';
             }
@@ -122,7 +131,7 @@ class Fsbhoa_Uhppote_Credentials {
                         'status' => $submitted_status,
                         'issue_date' => $issue_date,
                         'expiration_date' => $expiry_date
-                    ], ['credential_id' => $existing_cred->credential_id]);
+                    ], ['id' => $existing_cred->id]);
 
                     $needs_sync = true;
                 }
