@@ -36,6 +36,12 @@ class Fsbhoa_Uhppote_Settings {
             'fsbhoa_ac_event_log_path'   => ['label' => 'Event Service Log Path', 'default' => '', 'desc' => 'Leave empty for console output.'],
             'fsbhoa_ac_debug_mode'       => ['label' => 'Debug Mode', 'type' => 'checkbox', 'default' => 'on'],
             'fsbhoa_ac_sync_dry_run'     => ['label' => 'Enable Sync Dry Run', 'type' => 'checkbox', 'desc' => 'Logs intended actions instead of updating hardware.'],
+            'fsbhoa_ac_enable_scheduled_sync' => [
+                'label'   => 'Enable Scheduled Sync (Cron)',
+                'type'    => 'checkbox',
+                'default' => '',
+                'desc'    => 'Allow nightly cron to run hardware sync and claim controller listener. Leave unchecked on testbed.'
+            ],
         ];
 
         foreach ($fields as $id => $field) {
@@ -82,9 +88,21 @@ class Fsbhoa_Uhppote_Settings {
         }
 
         $options = isset($_POST['options']) ? $_POST['options'] : [];
+        $received_keys = [];
+
         if (!empty($options)) {
             foreach ($options as $option) {
-                update_option(sanitize_key($option['name']), sanitize_text_field($option['value']));
+                $key = sanitize_key($option['name']);
+                update_option($key, sanitize_text_field($option['value']));
+                $received_keys[] = $key;
+            }
+        }
+
+        // Reset unchecked checkboxes that were not submitted in POST
+        $checkbox_fields = ['fsbhoa_ac_debug_mode', 'fsbhoa_ac_sync_dry_run', 'fsbhoa_ac_enable_scheduled_sync'];
+        foreach ($checkbox_fields as $cb) {
+            if (!in_array($cb, $received_keys, true)) {
+                update_option($cb, 'off');
             }
         }
 

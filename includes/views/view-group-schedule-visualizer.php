@@ -6,7 +6,7 @@ if (!defined('WPINC')) { die; }
 
 // Ensure the Compiler Class is loaded
 if ( ! class_exists( 'Fsbhoa_Permission_Compiler' ) ) {
-    require_once( FSBHOA_AC_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php' );
+    require_once(  FSBHOA_UHPPOTE_PLUGIN_DIR. 'includes/class-fsbhoa-permission-compiler.php' );
 }
 
 // Ensure the necessary functions are loaded

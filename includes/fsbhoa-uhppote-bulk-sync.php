@@ -98,11 +98,13 @@ class Fsbhoa_Uhppote_Bulk_Sync {
             if (empty($rfid)) continue;
 
             $perm_string = $global_card_perms[$rfid][$device_id] ?? '';
-            
+            $issue_date  = ! empty( $cardholder->card_issue_date )  ? substr( trim( $cardholder->card_issue_date ), 0, 10 )  : '2020-01-01';
+            $expiry_date = ! empty( $cardholder->card_expiry_date ) ? substr( trim( $cardholder->card_expiry_date ), 0, 10 ) : '2099-12-31';
+
             $row_base = [
                 $rfid,
-                $cardholder->card_issue_date ?? '2020-01-01',
-                $cardholder->card_expiry_date ?? '2099-12-31'
+                $issue_date,
+                $expiry_date
             ];
             
             $door_columns = $this->build_tsv_row($perm_string, $doors);

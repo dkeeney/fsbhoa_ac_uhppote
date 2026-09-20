@@ -26,8 +26,27 @@ class Fsbhoa_Uhppote_Group_UI {
             $permissions = $wpdb->get_results($wpdb->prepare("SELECT * FROM ac_group_permissions WHERE group_id = %d AND schedule_id = %d ORDER BY permission_id ASC", $group_id, $schedule_id));
         }
 
-        $all_doors = $wpdb->get_results("SELECT d.door_record_id, d.friendly_name FROM ac_doors d JOIN ac_controllers c ON d.controller_record_id = c.controller_record_id WHERE c.type != 'VIRTUAL_KIOSK' ORDER BY d.friendly_name ASC");
-        $all_controllers = $wpdb->get_results("SELECT controller_record_id, friendly_name FROM ac_controllers WHERE type != 'VIRTUAL_KIOSK' ORDER BY friendly_name ASC");
+        $all_controllers = $wpdb->get_results("
+            SELECT controller_record_id, friendly_name
+            FROM ac_controllers
+            WHERE type != 'VIRTUAL_KIOSK'
+            ORDER BY friendly_name ASC
+        ");
+
+        $all_doors = $wpdb->get_results("
+            SELECT d.door_record_id, d.friendly_name, d.controller_record_id, d.door_number_on_controller
+            FROM ac_doors d
+            JOIN ac_controllers c ON d.controller_record_id = c.controller_record_id
+            WHERE c.type != 'VIRTUAL_KIOSK'
+            ORDER BY d.door_number_on_controller ASC, d.friendly_name ASC
+        ");
+
+        // Group doors by controller_record_id
+        $doors_by_controller = [];
+        foreach ($all_doors as $door) {
+            $doors_by_controller[$door->controller_record_id][] = $door;
+        }
+
 
         ?>
         <!-- UHPPOTE Time Grid Start -->
@@ -86,26 +105,47 @@ class Fsbhoa_Uhppote_Group_UI {
         $wpdb->delete("ac_group_permissions", ['group_id' => $group_id, 'schedule_id' => $schedule_id]);
         $permissions = isset($_POST['permissions']) ? (array) $_POST['permissions'] : [];
 
-        foreach ($permissions as $perm) {
-            if (empty($perm['door_id']) || empty($perm['start_time']) || empty($perm['end_time'])) continue;
+        foreach ($permissions as $key => $perm) {
+            // GUARD: Skip the HTML prototype/template row
+            if (strpos((string)$key, 'INDEX') !== false) {
+                continue;
+            }
+            // Skip any totally empty rules.
+            if (empty($perm['door_id']) || empty($perm['start_time']) || empty($perm['end_time'])) {
+                continue;
+            }
 
+            // 1. Define $target_id FIRST
             $target_id = sanitize_text_field($perm['door_id']);
+
+            // 2. Initialize $data with all base fields
             $data = [
-                'group_id' => $group_id, 'schedule_id' => $schedule_id,
-                'is_enabled' => (isset($perm['is_enabled']) && $perm['is_enabled'] == '1') ? 1 : 0,
-                'start_time' => sanitize_text_field($perm['start_time']),
-                'end_time' => sanitize_text_field($perm['end_time']),
-                'on_mon' => isset($perm['on_mon']) ? 1 : 0, 'on_tue' => isset($perm['on_tue']) ? 1 : 0,
-                'on_wed' => isset($perm['on_wed']) ? 1 : 0, 'on_thu' => isset($perm['on_thu']) ? 1 : 0,
-                'on_fri' => isset($perm['on_fri']) ? 1 : 0, 'on_sat' => isset($perm['on_sat']) ? 1 : 0,
-                'on_sun' => isset($perm['on_sun']) ? 1 : 0,
+                'group_id'    => $group_id,
+                'schedule_id' => $schedule_id,
+                'is_enabled'  => (isset($perm['is_enabled']) && $perm['is_enabled'] == '1') ? 1 : 0,
+                'start_time'  => sanitize_text_field($perm['start_time']),
+                'end_time'    => sanitize_text_field($perm['end_time']),
+                'on_mon'      => isset($perm['on_mon']) ? 1 : 0,
+                'on_tue'      => isset($perm['on_tue']) ? 1 : 0,
+                'on_wed'      => isset($perm['on_wed']) ? 1 : 0,
+                'on_thu'      => isset($perm['on_thu']) ? 1 : 0,
+                'on_fri'      => isset($perm['on_fri']) ? 1 : 0,
+                'on_sat'      => isset($perm['on_sat']) ? 1 : 0,
+                'on_sun'      => isset($perm['on_sun']) ? 1 : 0,
             ];
 
-            if (strpos($target_id, 'controller-') === 0) {
+            // 3. Resolve target into controller_id or door_id
+            if (strpos($target_id, 'orphaned-ctrl-') === 0) {
+                $data['controller_id'] = absint(str_replace('orphaned-ctrl-', '', $target_id));
+            } elseif (strpos($target_id, 'orphaned-gate-') === 0) {
+                $data['door_id'] = absint(str_replace('orphaned-gate-', '', $target_id));
+            } elseif (strpos($target_id, 'controller-') === 0) {
                 $data['controller_id'] = absint(str_replace('controller-', '', $target_id));
             } elseif ($target_id !== 'all') {
                 $data['door_id'] = absint(str_replace('gate-', '', $target_id));
             }
+
+            // 4. Insert full data array
             $wpdb->insert("ac_group_permissions", $data);
         }
 

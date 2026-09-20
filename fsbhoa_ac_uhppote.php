@@ -28,13 +28,6 @@ function fsbhoa_uhppote_init() {
     // ONLY load the heavy lifting if we are in the admin dashboard, 
     // running AJAX, or running a background Cron job
     if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
-
-        // This is where we will require our extracted classes
-        // require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-compiler.php';
-        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-group-ui.php';
-        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-actions.php';
-        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-ui.php';
-
         // Load the Compiler and Sync Services
         require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php';
         require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-discovery.php';
@@ -60,8 +53,11 @@ function fsbhoa_uhppote_init() {
         require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-settings.php';
 
     }
-    // Load Credentials
+    // Load modules needed in the front-end.
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-group-ui.php';
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-credentials.php';
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-actions.php';
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-ui.php';
 }
 
 function fsbhoa_uhppote_missing_core_notice() {

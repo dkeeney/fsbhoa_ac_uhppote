@@ -59,6 +59,17 @@ function fsbhoa_perform_delta_sync() {
  */
 function fsbhoa_perform_nightly_rebuild_sync( $wipe_memory = true ) {
     error_log('[' . current_time('Y-m-d H:i:s T') . "] NIGHTLY REBUILD: Process started. Wipe Mode: " . ($wipe_memory ? 'ON' : 'OFF'));
+
+
+    $cron_enabled = get_option('fsbhoa_ac_enable_scheduled_sync', '0');
+
+    if ( ! $cron_enabled || $cron_enabled === '0' ) {
+        // Log and exit gracefully without touching the controller
+        if ( defined( 'WP_CLI' ) && WP_CLI ) {
+            error_log( 'Scheduled sync is disabled in settings. Skipping controller listener update.' );
+        }
+        return;
+    }
     
     set_time_limit(300);
     global $wpdb;
