@@ -13,6 +13,7 @@ class Fsbhoa_Controller_Actions {
         add_action('wp_ajax_fsbhoa_get_sync_status', [ $this, 'ajax_get_sync_status' ]);
         add_action('wp_ajax_fsbhoa_factory_reset', array($this, 'ajax_factory_reset_controller'));
         add_action('wp_ajax_fsbhoa_trigger_rebuild', [ $this, 'ajax_trigger_nightly_rebuild' ]);
+        add_action('wp_ajax_fsbhoa_trigger_full_wipe_rebuild', [ $this, 'ajax_trigger_full_wipe_rebuild' ]);
     }
 
     public function handle_form_submission() {
@@ -355,6 +356,7 @@ class Fsbhoa_Controller_Actions {
         $query = "
             SELECT
                 c.uhppoted_device_id,
+                c.ip_address,
                 c.door_count,
                 d.door_record_id,
                 d.door_number_on_controller,
@@ -380,8 +382,13 @@ class Fsbhoa_Controller_Actions {
             $controller_sn = $row['uhppoted_device_id'];
 
             if (!isset($structured_data[$controller_sn])) {
+                $raw_ip = trim($row['ip_address'] ?? '');
+                if (!empty($raw_ip) && strpos($raw_ip, ':') === false) {
+                    $raw_ip .= ':60000';
+                }
                 $structured_data[$controller_sn] = [
                     'controller_sn' => (int)$controller_sn,
+                    'ip_address'    => $raw_ip,
                     'door_count'    => (int)$row['door_count'],
                     'doors'         => [],
                 ];
@@ -459,6 +466,30 @@ class Fsbhoa_Controller_Actions {
         wp_schedule_single_event(time(), 'fsbhoa_run_nightly_rebuild');
 
         wp_send_json_success('Full rebuild process has been scheduled.');
+    }
+
+    /**
+     * AJAX handler for the admin "Force Full Rebuild" button.
+     * Wipes controller hardware memory (cards & profiles) and resets persistent maps.
+     */
+    public function ajax_trigger_full_wipe_rebuild() {
+        check_ajax_referer('fsbhoa_rebuild_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Unauthorized.');
+        }
+
+        set_transient('fsbhoa_sync_status', [
+            'status'  => 'in_progress',
+            'message' => 'Full wipe and rebuild scheduled...'
+        ], MINUTE_IN_SECONDS * 10);
+
+        fsbhoa_log_pending_change('generic');
+
+        // Schedule the dedicated wipe action
+        wp_schedule_single_event(time(), 'fsbhoa_run_full_wipe_rebuild');
+
+        wp_send_json_success('Full wipe and rebuild process has been scheduled.');
     }
 
 }

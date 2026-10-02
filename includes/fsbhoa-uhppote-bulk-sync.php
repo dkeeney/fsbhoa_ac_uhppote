@@ -36,6 +36,7 @@ class Fsbhoa_Uhppote_Bulk_Sync {
         $upload_dir = wp_upload_dir();
         $sync_dir = trailingslashit($upload_dir['basedir']) . 'fsbhoa_ac';
 
+
         // Create the directory if it doesn't exist
         if (!file_exists($sync_dir)) {
             wp_mkdir_p($sync_dir);
@@ -48,6 +49,13 @@ class Fsbhoa_Uhppote_Bulk_Sync {
         // Generate Temp File Paths
         $conf_path = $sync_dir . "/uhppote_bulk_{$device_id}.conf";
         $tsv_path  = $sync_dir . "/cards_bulk_{$device_id}.tsv";
+
+        if (file_exists($tsv_path)) {
+            unlink($tsv_path);
+        }
+        if (file_exists($conf_path)) {
+            unlink($conf_path);
+        }
 
         // 2. Generate and write the .conf file
         $conf_content  = "[devices]\n";
@@ -130,52 +138,54 @@ class Fsbhoa_Uhppote_Bulk_Sync {
 
             // The Self-Healing Retry Loop (Attempts up to 3 times)
             // The Intelligent Self-Healing Retry Loop (Attempts up to 3 times)
+            // The Intelligent Self-Healing Retry Loop (Up to 3 attempts)
             for ($attempt = 1; $attempt <= 3; $attempt++) {
                 error_log("SYNC SERVICE: Executing bulk load-acl (Attempt {$attempt}/3) for {$device_id}...");
                 $output = shell_exec($bulk_command);
 
-                // Check for errors, dropped packets, or corruption warnings
-                if (strpos($output, 'ERROR') !== false
-                    || preg_match('/failed:[1-9]/', $output)
-                    || preg_match('/errors:[1-9]/', $output)
+                // Check for errors, hung responses, dropped packets, or data corruption
+                $has_error = empty($output)
+                    || strpos($output, 'ERROR') !== false
+                    || preg_match('/failed:\s*[1-9]/', $output)
+                    || preg_match('/errors:\s*[1-9]/', $output)
                     || strpos($output, 'invalid BCD') !== false
-                    || strpos($output, 'invalid MsgType') !== false) {
+                    || strpos($output, 'invalid MsgType') !== false;
 
-                    $clean_output = trim(preg_replace('/\s+/', ' ', $output));
-                    error_log("SYNC WARNING: Bulk ACL attempt {$attempt} for {$device_id} had issues: {$clean_output}");
+                if ($has_error) {
+                    $clean_output = trim(preg_replace('/\s+/', ' ', (string)$output));
+                    error_log("SYNC WARNING: Bulk ACL attempt {$attempt}/3 for {$device_id} had issues: {$clean_output}");
 
                     if ($attempt < 3) {
-                        // === NEW: HARDWARE CORRUPTION RECOVERY ===
-                        if (strpos($output, 'invalid BCD') !== false || strpos($output, 'invalid MsgType') !== false) {
-                            error_log("SYNC RECOVERY: Corrupted memory detected on {$device_id}. Initiating wipe (delete-all)...");
+                        // RECOVERY ONLY: First pass failed. To protect flash endurance,
+                        // delete-all is only executed before retry attempts (attempts 2 and 3).
+                        error_log("SYNC RECOVERY: load-acl failed. Wiping controller {$device_id} memory before attempt " . ($attempt + 1) . "...");
 
-                            // Nuke the board's card memory
-                            shell_exec(sprintf('uhppote-cli delete-all %s 2>&1', escapeshellarg($device_id)));
+                        // Explicit IP prevents UDP broadcast misses if the controller network stack is unresponsive
+                        $dest_arg = !empty($controller_ip) ? sprintf('--dest %s:60000 ', escapeshellarg($controller_ip)) : '';
+                        $wipe_cmd = sprintf('uhppote-cli %sdelete-all %s 2>&1', $dest_arg, escapeshellarg($device_id));
 
-                            // Give the cheap flash memory time to erase sectors and rebuild its index
-                            error_log("SYNC RECOVERY: Waiting 15 seconds for flash memory format to complete...");
-                            sleep(15);
-                        } else {
-                            // Standard network hiccup recovery
-                            error_log("SYNC SERVICE: Retrying Delta push for {$device_id} in 3 seconds...");
-                            sleep(3);
-                        }
-                        continue; // Loop back and try the load-acl command again
+                        $wipe_out = shell_exec($wipe_cmd);
+                        $clean_wipe = trim(preg_replace('/\s+/', ' ', (string)$wipe_out));
+                        error_log("SYNC RECOVERY: delete-all output for {$device_id}: {$clean_wipe}");
+
+                        // Settle delay for the flash sector erase
+                        error_log("SYNC RECOVERY: Pausing 4 seconds for controller flash erase to settle...");
+                        sleep(4);
+
+                        continue; // Loop to execute $bulk_command again
                     } else {
                         error_log("SYNC FATAL (BULK ACL): Failed after 3 attempts for {$device_id}.");
                         $success = false;
                         break;
                     }
                 } else {
-                    $clean_output = trim(preg_replace('/\s+/', ' ', $output));
+                    $clean_output = trim(preg_replace('/\s+/', ' ', (string)$output));
                     error_log("SYNC SUCCESS: Bulk ACL for {$device_id} - {$clean_output}");
                     $success = true;
-                    break; // Succeeded! Break out of the retry loop.
+                    break;
                 }
             }
 
-            unlink($conf_path);
-            unlink($tsv_path);
         }
 
         return $success;

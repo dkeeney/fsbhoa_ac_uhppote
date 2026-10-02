@@ -34,7 +34,7 @@ class Fsbhoa_Permission_Compiler {
     private $ids_claimed = [];     // [device_id] => [10, 11, ...] (Used in this run)
     private $dynamic_counters = [];// [device_id] => 254 (Current Tail cursor)
     
-    // --- FLAGS ---
+    // --- FLAGS --
     private $is_retry_mode = false; // True if we are retrying after a memory collision
 
     // --- OUTPUTS ---

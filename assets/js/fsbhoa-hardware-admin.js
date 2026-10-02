@@ -77,7 +77,7 @@ jQuery(document).ready(function($) {
             url: fsbhoa_hardware_vars.ajax_url,
             type: 'POST',
             data: {
-                action: 'fsbhoa_trigger_rebuild',
+                action: 'fsbhoa_trigger_full_wipe_rebuild',
                 nonce: fsbhoa_hardware_vars.rebuild_nonce,
             },
             success: function(response) {

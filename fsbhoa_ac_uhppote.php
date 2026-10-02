@@ -18,6 +18,7 @@ define( 'FSBHOA_UHPPOTE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 // Initialize the plugin after all plugins are loaded
 add_action( 'plugins_loaded', 'fsbhoa_uhppote_init' );
 
+
 function fsbhoa_uhppote_init() {
     // Safety Check: Ensure the Core plugin is active before loading UHPPOTE logic
     if ( ! defined( 'FSBHOA_AC_PLUGIN_DIR' ) ) {
@@ -58,6 +59,11 @@ function fsbhoa_uhppote_init() {
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-credentials.php';
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-actions.php';
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-ui.php';
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-diagnostics.php';
+
+    if ( class_exists( 'Fsbhoa_Uhppote_Diagnostics' ) ) {
+        new Fsbhoa_Uhppote_Diagnostics();
+}
 }
 
 function fsbhoa_uhppote_missing_core_notice() {
@@ -111,3 +117,5 @@ function fsbhoa_uhppote_admin_assets( $hook ) {
         ) );
     }
 }
+
+

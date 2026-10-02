@@ -31,6 +31,7 @@ type DoorConfig struct {
 // ControllerConfig matches a single controller object within the new config file.
 type ControllerConfig struct {
 	SN        uint32       `json:"controller_sn"`
+	IPAddress string       `json:"ip_address"`
 	DoorCount uint8        `json:"door_count"`
 	Doors     []DoorConfig `json:"doors"`
 }

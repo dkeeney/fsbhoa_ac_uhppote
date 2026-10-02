@@ -57,7 +57,14 @@ func main() {
 	bindAddr := types.MustParseBindAddr(config.BindAddress)
 	broadcastAddr := types.MustParseBroadcastAddr(config.BroadcastAddress)
 	listenAddr := types.MustParseListenAddr(listenAddressString)
-	u := uhppote.NewUHPPOTE(bindAddr, broadcastAddr, listenAddr, 5*time.Second, nil, false)
+
+	// Load configured unicast devices from controllers.json
+	devices, _, err := getDevicesFromJSON("/var/lib/fsbhoa/controllers.json")
+	if err != nil {
+		log.Printf("WARN: Could not pre-load devices from controllers.json: %v", err)
+	}
+
+	u := uhppote.NewUHPPOTE(bindAddr, broadcastAddr, listenAddr, 5*time.Second, devices, false)
 
 	// 4. Start All Background Services (Goroutines)
 	hub := newHub(u)

@@ -8,6 +8,7 @@ require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-bulk-sync.php'
 
 add_action('fsbhoa_run_background_sync', 'fsbhoa_perform_delta_sync');
 add_action('fsbhoa_run_nightly_rebuild', 'fsbhoa_perform_nightly_rebuild_sync');
+add_action('fsbhoa_run_full_wipe_rebuild',   'fsbhoa_perform_full_wipe_rebuild');
 add_action('fsbhoa_run_daily_time_sync', 'fsbhoa_perform_daily_time_sync');
 
 /**
@@ -51,15 +52,10 @@ function fsbhoa_perform_delta_sync() {
     );
 }
 
-
-
-
 /**
- * fsbhoa_perform_nightly_rebuild_sync()
+ * Nightly Cron Rebuild: Runs differentially without erasing controller memory or resetting maps.
  */
-function fsbhoa_perform_nightly_rebuild_sync( $wipe_memory = true ) {
-    error_log('[' . current_time('Y-m-d H:i:s T') . "] NIGHTLY REBUILD: Process started. Wipe Mode: " . ($wipe_memory ? 'ON' : 'OFF'));
-
+function fsbhoa_perform_nightly_rebuild_sync() {
 
     $cron_enabled = get_option('fsbhoa_ac_enable_scheduled_sync', '0');
 
@@ -70,7 +66,24 @@ function fsbhoa_perform_nightly_rebuild_sync( $wipe_memory = true ) {
         }
         return;
     }
-    
+    fsbhoa_run_rebuild_pipeline( false , "NIGHTLY REBUILD"); // $wipe_memory = false
+}
+
+/**
+ * Manual Force Full Rebuild: Erases hardware flash and clears persistent profile maps.
+ */
+function fsbhoa_perform_full_wipe_rebuild() {
+    fsbhoa_run_rebuild_pipeline( true ,"FORCE FULL REBUILD");  // $wipe_memory = true
+}
+
+
+/**
+ * fsbhoa_perform_rebuild_sync()
+ */
+function fsbhoa_run_rebuild_pipeline( $wipe_memory, $caption ) {
+    error_log('[' . current_time('Y-m-d H:i:s T') . "] " . $caption . ": Process started. Wipe Mode: " . ($wipe_memory ? 'ON' : 'OFF'));
+
+
     set_time_limit(300);
     global $wpdb;
 
@@ -78,7 +91,7 @@ function fsbhoa_perform_nightly_rebuild_sync( $wipe_memory = true ) {
     if ($is_dry_run) { error_log("NIGHTLY REBUILD: --- DRY RUN MODE ENABLED ---"); }
 
     $active_schedule_id = fsbhoa_get_active_schedule_id();
-    error_log("NIGHTLY REBUILD: Determined active schedule ID is: " . $active_schedule_id);
+    error_log($caption . ": Determined active schedule ID is: " . $active_schedule_id);
     $permission_data = fsbhoa_get_all_permission_data($active_schedule_id);
     $cardholders_to_sync = $wpdb->get_results("
         SELECT ch.*, cred.credential_value AS rfid_id, cred.status AS card_status, cred.issue_date AS card_issue_date, cred.expiration_date AS card_expiry_date
@@ -180,8 +193,8 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                 if (!$is_dry_run) {
                     shell_exec(sprintf('uhppote-cli clear-time-profiles %s 2>&1', $device_id));
                     // we are relying on the bulk update to do the job for cards.
-                    // shell_exec(sprintf('uhppote-cli delete-all %s 2>&1', $device_id));
-                    $wpdb->delete('ac_sync_hashes', ['device_id' => $device_id]);   // clear only one controller.
+                    // NOTE: we also need to clear the persistant_maps for time profile assignments.
+                    shell_exec(sprintf('uhppote-cli delete-all %s 2>&1', $device_id));
                     sleep(1);
                 } else {
                     error_log("DRY RUN: Would execute clear-time-profiles and delete-cards on " . $device_id);
