@@ -15,3 +15,7 @@ V2 has two separate statuses:
   - `fsbhoa_restore_cardholder` sets **all** credentials back to `active` (step 6). That turns a credential that was disabled on purpose back on. With archive no longer touching the status, restore should leave it alone too.
   - Also check other plugins that filter credentials only by their own status. DoorKing's export (`fsbhoa_ac_doorking/includes/class-fsbhoa-doorking-export.php:201`, `:206`) does this for household vehicle credentials.
   - Decide what to do with the existing blank-status credentials. Their original status was lost when they were archived.
+
+## Other
+
+- [ ] **5. Regression Test Controller has a blank type.** `class-fsbhoa-uhppote-hardware-ui.php` creates it with `type = 'REGRESSION_TEST'`, which isn't in the `ac_controllers.type` enum (`UHPPOTE`, `VIRTUAL_KIOSK`), so it's stored blank (controller 88888888 on the testbed). Add the value to the enum or use an existing type. Core had an unused copy of this code, removed 2026-10-07.
