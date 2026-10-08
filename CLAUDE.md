@@ -128,11 +128,6 @@ The code itself only sends `set-address` to a controller that already has an add
 - Build the Go services with `build.sh`.
 - No full deployment script exists yet. One will be written once the testbed is working.
 
-## Dead code
-
-This file is no longer used. Don't extend it, and don't use it as an example:
-- `deploy_uhppote.sh`
-
 ## Pitfalls
 
 - **Flash wear.** Writes to controller NVRAM wear the flash. Write only what has changed, and wipe only on recovery or when forced.
