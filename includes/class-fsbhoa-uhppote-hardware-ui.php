@@ -142,12 +142,16 @@ class Fsbhoa_Uhppote_Hardware_UI {
         ) );
 
         // 2. If it doesn't exist yet, automatically seed it so the test is self-contained
+        // (REGRESSION_TEST is never synced: syncs and the uhppote-cli config select type 'UHPPOTE' only.)
         if ( empty( $serial_number ) ) {
-            $wpdb->insert( 'ac_controllers', [
+            $inserted = $wpdb->insert( 'ac_controllers', [
                 'uhppoted_device_id' => 88888888,
                 'friendly_name'      => 'Regression Test Controller',
                 'type'               => 'REGRESSION_TEST',
             ] );
+            if ( ! $inserted ) {
+                return new WP_Error( 'seed_error', 'Could not create the Regression Test Controller (88888888): ' . $wpdb->last_error );
+            }
             $controller_id = $wpdb->insert_id;
 
             // Also seed the default door mapping (e.g., door 254 for system test unit)
