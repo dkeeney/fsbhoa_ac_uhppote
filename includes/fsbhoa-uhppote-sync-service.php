@@ -42,7 +42,9 @@ function fsbhoa_perform_delta_sync() {
         $cardholders_to_sync, 
         $is_dry_run, 
         $wipe_memory,
-        $active_schedule_id
+        $active_schedule_id,
+        false,
+        'Delta sync'
     );
 }
 
@@ -95,7 +97,8 @@ function fsbhoa_run_rebuild_pipeline( $wipe_memory, $caption ) {
         $is_dry_run, 
         $wipe_memory, 
         $active_schedule_id,
-        true); // nightly and forced rebuilds always re-send the task lists (they can't be read back)
+        true, // nightly and forced rebuilds always re-send the task lists (they can't be read back)
+        ucfirst(strtolower($caption)));
 }
 
 
@@ -108,12 +111,14 @@ function fsbhoa_run_rebuild_pipeline( $wipe_memory, $caption ) {
  *    $wipe_memory  - means tell controller to wipe before sync and also wipe persistent maps.
  *    $active_schedule_id  - which schedule to use.
  *    $always_send_tasks   - re-send the task lists even if unchanged (rebuilds; they can't be read back).
+ *    $caption             - which sync this is, for the failure alert (e.g. 'Delta sync', 'Nightly rebuild').
  */
-function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_to_sync, $is_dry_run, $wipe_memory, $active_schedule_id, $always_send_tasks = false) {
+function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_to_sync, $is_dry_run, $wipe_memory, $active_schedule_id, $always_send_tasks = false, $caption = 'Sync') {
     global $wpdb;
     $retry_attempts = 3;
     $retry_wait = 250000;
     $global_sync_failed = false;
+    $failed_controllers = []; // names, for the failure alert
 
 
     // --- STEP 1: COMPILE PERMISSIONS ---
@@ -143,6 +148,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
 
         $device_id = $controller->uhppoted_device_id;
         $friendly_name = $controller->friendly_name;
+        $controller_failed = false;
 
         error_log("SYNC SERVICE: Controller '$friendly_name' ($device_id) is syncing.");
 
@@ -151,10 +157,18 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
             'message' => 'Processing controller: ' . esc_html($friendly_name) . '...'
         ], MINUTE_IN_SECONDS * 10);
 
-        // Check Online Status
-        $status_output = fsbhoa_uhppote_cli_exec($device_id, sprintf('get-status %s', $device_id), '--timeout 2s');
-        if (strpos($status_output, 'ERROR') !== false || empty(trim($status_output))) {
-            if (FSBHOA_DEBUG_MODE) error_log("SYNC SERVICE: Controller '$friendly_name' ($device_id) is offline. Skipping.");
+        // Check Online Status (a single reply can be lost, so try three times)
+        $online = false;
+        for ($i = 0; $i < 3 && !$online; $i++) {
+            if ($i > 0) sleep(1);
+            $status_output = fsbhoa_uhppote_cli_exec($device_id, sprintf('get-status %s', $device_id), '--timeout 2s');
+            $online = (strpos($status_output, 'ERROR') === false && !empty(trim($status_output)));
+        }
+        if (!$online) {
+            // Not a success: keep the pending changes so the next sync tries this controller again
+            error_log("SYNC FAILED: Controller '$friendly_name' ($device_id) did not answer. Skipping it.");
+            $failed_controllers[] = "$friendly_name (not answering)";
+            $global_sync_failed = true;
             continue;
         }
         // === CREATE CONTROLLER-SPECIFIC LOCK ===
@@ -231,7 +245,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                         }
                         if (!$success) {
                             error_log("SYNC FAILED (PROFILE $profile_id) for $friendly_name: $output");
-                            $global_sync_failed = true;
+                            $controller_failed = true;
                         }
                     }
                     if (!$is_dry_run) usleep(200000); 
@@ -255,10 +269,15 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                     // Ensure delay is valid (default to 3 if missing or out of bounds)
                     $delay = (isset($door->door_delay) && $door->door_delay > 0 && $door->door_delay <= 60) ? intval($door->door_delay) : 3;
 
-                    // Read back first; write only if different (flash wear)
-                    $current = preg_split('/\s+/', trim(fsbhoa_uhppote_cli_exec($device_id, sprintf('get-door-delay %s %d', $device_id, $door_num))));
-                    usleep(100000); // pace requests: back-to-back requests get wrong replies
-                    if (count($current) === 3 && (int) $current[1] === (int) $door_num && (int) $current[2] === $delay) {
+                    // Read back first; write only if different (flash wear). A difference is read a
+                    // second time, since the controller occasionally gives a wrong reply.
+                    $delay_is_current = false;
+                    for ($read = 0; $read < 2 && !$delay_is_current; $read++) {
+                        $current = preg_split('/\s+/', trim(fsbhoa_uhppote_cli_exec($device_id, sprintf('get-door-delay %s %d', $device_id, $door_num))));
+                        usleep(100000); // pace requests: back-to-back requests get wrong replies
+                        $delay_is_current = (count($current) === 3 && (int) $current[1] === (int) $door_num && (int) $current[2] === $delay);
+                    }
+                    if ($delay_is_current) {
                         continue;
                     }
 
@@ -294,17 +313,21 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
             );
 
             if (!$bulk_success) {
-                $global_sync_failed = true;
+                $controller_failed = true;
             }
 
 
             // --- STEP 7: SYNC TASKS ---
             if (!fsbhoa_execute_task_sync($device_id, $controller->controller_record_id, $active_schedule_id, $is_dry_run, $retry_attempts, $always_send_tasks)) {
-                $global_sync_failed = true;
+                $controller_failed = true;
             }
 
 
         } finally {
+            if ($controller_failed) {
+                $failed_controllers[] = $friendly_name;
+                $global_sync_failed = true;
+            }
             // === RELEASE THE LOCK BEFORE MOVING TO NEXT CONTROLLER ===
             if (file_exists($lock_file)) {
                 unlink($lock_file);
@@ -317,11 +340,12 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
     // --- STEP 8: FINAL CLEANUP ---
     if (!$is_dry_run) {
         if ($global_sync_failed) {
-            set_transient('fsbhoa_sync_status', ['status' => 'failed', 'message' => 'Sync completed with errors. Check logs.'], MINUTE_IN_SECONDS * 10);
-            error_log("SYNC EXECUTE: Process finished with errors. ac_pending_changes NOT cleared.");
+            $failed_list = implode(', ', $failed_controllers);
+            set_transient('fsbhoa_sync_status', ['status' => 'failed', 'message' => "$caption had errors on: $failed_list. Check logs."], MINUTE_IN_SECONDS * 10);
+            error_log("SYNC EXECUTE: $caption finished with errors on: $failed_list. ac_pending_changes NOT cleared.");
             // Fire the Discord push notification
             if ( function_exists('fsbhoa_send_discord_alert') ) {
-                fsbhoa_send_discord_alert("The Nightly Rebuild process failed! The controller memory may be incomplete. Please check the error logs.");
+                fsbhoa_send_discord_alert("$caption failed on: $failed_list. Those controllers may be missing changes; the pending changes were kept, so the next sync will try again. Please check the error logs.");
             }
         } else {
             // Success: Clear the pending changes table to remove the GUI banner
@@ -345,8 +369,18 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
  * Whether the controller already holds this time profile, so it needn't be written again.
  * get-time-profile prints e.g. "425043852  3 2020-01-01:2099-12-31 Mon,Tue,Wed,Thurs,Fri,Sat,Sun 05:00-21:59 0"
  * (or "... NO ACTIVE TIME PROFILE"). Anything unexpected counts as different, so it gets written.
+ * The controller occasionally gives a wrong reply, so a difference is read a second time before
+ * it counts (a needless write wears the flash).
  */
 function fsbhoa_uhppote_profile_is_current($device_id, $profile_id, $dates, $weekdays, $spans, $link) {
+    if (fsbhoa_uhppote_profile_read_matches($device_id, $profile_id, $dates, $weekdays, $spans, $link)) {
+        return true;
+    }
+    usleep(200000);
+    return fsbhoa_uhppote_profile_read_matches($device_id, $profile_id, $dates, $weekdays, $spans, $link);
+}
+
+function fsbhoa_uhppote_profile_read_matches($device_id, $profile_id, $dates, $weekdays, $spans, $link) {
     $f = preg_split('/\s+/', trim(fsbhoa_uhppote_cli_exec($device_id, sprintf('get-time-profile %s %d', $device_id, $profile_id))));
     if (count($f) !== 6 || (int) $f[1] !== (int) $profile_id) {
         return false;

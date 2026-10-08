@@ -75,6 +75,7 @@ All sync entry points are in `includes/fsbhoa-uhppote-sync-service.php`.
 | Nightly (`fsbhoa_perform_nightly_rebuild_sync`) | Cron `fsbhoa_run_nightly_rebuild`, around midnight (see ARCHITECTURE.md for the exact times) | Not by default |
 | Force Full Rebuild (`fsbhoa_perform_full_wipe_rebuild`) | "Force Full Rebuild" button on the controller list | Always. Use it to clean up when something goes wrong. |
 
+- **A sync fails, rather than skipping, when a controller doesn't answer** (three `get-status` tries) or any step fails on it. The pending changes are then kept, so the next sync tries again, and a Discord alert names the sync and the controllers.
 - **The nightly sync matters.** Holiday schedules mean the active schedule can change from one day to the next, so the controllers must be reconfigured at the start of each day.
 - **The compiler can decide to wipe on its own**, in `generate_sync_data()`:
   - When the active schedule ID differs from the one saved in the `fsbhoa_profile_persistent_maps` option, or that saved map is missing. This covers a nightly sync on the day a holiday schedule starts or ends.
