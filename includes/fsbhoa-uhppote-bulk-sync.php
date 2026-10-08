@@ -160,9 +160,9 @@ class Fsbhoa_Uhppote_Bulk_Sync {
                         // delete-all is only executed before retry attempts (attempts 2 and 3).
                         error_log("SYNC RECOVERY: load-acl failed. Wiping controller {$device_id} memory before attempt " . ($attempt + 1) . "...");
 
-                        // Explicit IP prevents UDP broadcast misses if the controller network stack is unresponsive
-                        $dest_arg = !empty($controller_ip) ? sprintf('--dest %s:60000 ', escapeshellarg($controller_ip)) : '';
-                        $wipe_cmd = sprintf('uhppote-cli %sdelete-all %s 2>&1', $dest_arg, escapeshellarg($device_id));
+                        // Same per-controller config as load-acl: it holds this controller's explicit IP,
+                        // which prevents UDP broadcast misses if the controller network stack is unresponsive
+                        $wipe_cmd = sprintf('uhppote-cli --config %s delete-all %s 2>&1', escapeshellarg($conf_path), escapeshellarg($device_id));
 
                         $wipe_out = shell_exec($wipe_cmd);
                         $clean_wipe = trim(preg_replace('/\s+/', ' ', (string)$wipe_out));

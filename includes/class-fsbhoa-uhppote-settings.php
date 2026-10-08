@@ -144,6 +144,9 @@ class Fsbhoa_Uhppote_Settings {
         $dir = dirname($this->config_path);
         if (!is_dir($dir)) { mkdir($dir, 0755, true); }
         file_put_contents($this->config_path, $json_data);
+
+        // The uhppote-cli config uses the bind and broadcast addresses above
+        fsbhoa_uhppote_write_cli_config();
     }
 
 

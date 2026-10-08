@@ -92,9 +92,27 @@ They are loaded with `clear-task-list` and `refresh-task-list` (`fsbhoa_execute_
 
 ## Addressing and environment safety
 
+- Controller addresses, all on the shared 192.168.42.x subnet: **testbed** .53 (serial 425043852) and .54 (not yet connected); **production** .50, .51, .52 and .55. Never send a command to a production address from the testbed (see ARCHITECTURE.md, "Refreshing the testbed from production").
 - Controllers can be reached by UDP broadcast or by IP address. **Always use the IP address**, so commands never reach a controller in the other environment (testbed or production) on the shared network.
-- Controllers are given their IP addresses by hand. `uhppote-cli` finds each controller's address in `/etc/uhppoted/uhppoted.conf`, or through an explicit `--dest`.
+- Controllers are given their IP addresses by hand (see "Setting up a new controller" below).
+- **Every `uhppote-cli` command the code runs must pass `--config` with a config generated from `ac_controllers`.** Never rely on the default `/etc/uhppoted/uhppoted.conf`: it is hand-written for manual testing and deliberately lists every controller, testbed and production.
+  - Run commands with `fsbhoa_uhppote_cli_exec( $device_id, $args, $options )` and build log lines with `fsbhoa_uhppote_cli_command()` (`includes/fsbhoa-uhppote-cli.php`). Never call `shell_exec('uhppote-cli ...')` directly.
+  - The config is `/var/lib/fsbhoa/uhppoted.conf`, written by `fsbhoa_uhppote_write_cli_config()` whenever `controllers.json` is regenerated or the Event Service settings are saved. It lists only UHPPOTE controllers that have an IP address.
+  - The helper fails closed: a controller missing from the config is refused (output starts with `ERROR:`), because `uhppote-cli` would otherwise broadcast the command.
+  - Exceptions: `load-acl` and its retry `delete-all` (bulk sync) and the diagnostics audit write their own per-controller configs and also pass `--config`.
 - Shared NAS files are kept apart by the `FSBHOA_AC_ENVIRONMENT` constant (see ARCHITECTURE.md). This plugin doesn't check that constant yet.
+
+### Setting up a new controller
+
+Setting a new controller's IP address is the one task that needs a broadcast.
+
+1. A new controller's factory IP address is 192.168.0.0, which is not in any of our VLANs, so nothing can reach it by unicast.
+2. Connect it to the same physical subnet as the access control server.
+3. Set its address with a broadcast addressed by serial number: `uhppote-cli set-address <serial> <ip> <netmask> <gateway>` (or `0.0.0.0 0.0.0.0 0.0.0.0` for DHCP). Only the controller with that serial acts on it. This is a manual command, and the controller list page shows it as a reminder.
+4. Move the controller to its final location anywhere on the network.
+5. Add it in the controller form with its IP address, and add it to `/etc/uhppoted/uhppoted.conf` for manual testing.
+
+The code itself only sends `set-address` to a controller that already has an address (`fsbhoa_set_controller_ip()`, used when a controller is switched to DHCP on save). It goes unicast through the generated config.
 
 ## Build and deploy
 

@@ -70,21 +70,10 @@ function fsbhoa_discover_controllers_udp() {
  * @return void
  */
 function fsbhoa_set_controller_ip($device_id, $ip_address, $netmask, $gateway) {
-    // Build the base command with config flags from WordPress options
-    $listen_host = get_option('fsbhoa_ac_callback_host', '192.168.42.98'); // Updated default
-    $listen_port = get_option('fsbhoa_ac_listen_port', '60002');
-    $listen_address = $listen_host . ':' . $listen_port;
-    $base_command = sprintf(
-        'uhppote-cli --bind %s --broadcast %s --listen %s',
-        escapeshellarg(get_option('fsbhoa_ac_bind_addr', '0.0.0.0:0')),
-        escapeshellarg('255.255.255.255:60000'),
-        escapeshellarg($listen_address)
-    );
-
-    // Build the full set-address command
-    $set_address_command = sprintf(
-        '%s set-address %s %s %s %s',
-        $base_command,
+    // Sent unicast to the controller's current address from the generated config
+    // (still the old IP while the controller form is being saved), never broadcast.
+    $set_address_args = sprintf(
+        'set-address %s %s %s %s',
         escapeshellarg($device_id),
         escapeshellarg($ip_address),
         escapeshellarg($netmask),
@@ -92,11 +81,11 @@ function fsbhoa_set_controller_ip($device_id, $ip_address, $netmask, $gateway) {
     );
 
     if (FSBHOA_DEBUG_MODE) {
-        error_log("DISCOVERY: Executing: " . $set_address_command);
+        error_log("DISCOVERY: Executing: " . fsbhoa_uhppote_cli_command($set_address_args));
     }
 
     // Execute the command
-    shell_exec($set_address_command . " 2>&1");
+    fsbhoa_uhppote_cli_exec($device_id, $set_address_args);
 }
 
 

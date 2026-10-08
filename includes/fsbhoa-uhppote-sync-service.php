@@ -161,7 +161,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
         ], MINUTE_IN_SECONDS * 10);
 
         // Check Online Status
-        $status_output = shell_exec(sprintf('uhppote-cli --timeout 2s get-status %s 2>&1', $device_id));
+        $status_output = fsbhoa_uhppote_cli_exec($device_id, sprintf('get-status %s', $device_id), '--timeout 2s');
         if (strpos($status_output, 'ERROR') !== false || empty(trim($status_output))) {
             if (FSBHOA_DEBUG_MODE) error_log("SYNC SERVICE: Controller '$friendly_name' ($device_id) is offline. Skipping.");
             continue;
@@ -171,7 +171,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
         file_put_contents($lock_file, time());
         try {
             if (!$is_dry_run) { 
-                shell_exec(sprintf('uhppote-cli set-time %s 2>&1', $device_id)); 
+                fsbhoa_uhppote_cli_exec($device_id, sprintf('set-time %s', $device_id));
 
                  // === ENFORCE EVENT LISTENER ===
                 $callback_host = get_option('fsbhoa_ac_callback_host', '');
@@ -179,8 +179,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                 
                 if (!empty($callback_host)) {
                     $listener_address = $callback_host . ':' . $listen_port;
-                    $listener_cmd = sprintf('uhppote-cli set-listener %s %s 2>&1', escapeshellarg($device_id), escapeshellarg($listener_address));
-                    shell_exec($listener_cmd);
+                    fsbhoa_uhppote_cli_exec($device_id, sprintf('set-listener %s %s', escapeshellarg($device_id), escapeshellarg($listener_address)));
                     error_log("SYNC SERVICE: Enforced listener to $listener_address for $friendly_name.");
                 } else {
                     error_log("SYNC WARNING: Event Callback Host IP is empty. Skipping set-listener.");
@@ -191,10 +190,10 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
             if ($wipe_memory) {
                 error_log("SYNC SERVICE: Wiping card & profile memory on $friendly_name...");
                 if (!$is_dry_run) {
-                    shell_exec(sprintf('uhppote-cli clear-time-profiles %s 2>&1', $device_id));
+                    fsbhoa_uhppote_cli_exec($device_id, sprintf('clear-time-profiles %s', $device_id));
                     // we are relying on the bulk update to do the job for cards.
                     // NOTE: we also need to clear the persistant_maps for time profile assignments.
-                    shell_exec(sprintf('uhppote-cli delete-all %s 2>&1', $device_id));
+                    fsbhoa_uhppote_cli_exec($device_id, sprintf('delete-all %s', $device_id));
                     sleep(1);
                 } else {
                     error_log("DRY RUN: Would execute clear-time-profiles and delete-cards on " . $device_id);
@@ -211,9 +210,10 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                     $spans_string = "'" . $parts[1] . "'";
                     $linked_profile_id = intval($data['link']);
     
-                    $command = sprintf("uhppote-cli set-time-profile %s %d %s %s %s %d",
+                    $args = sprintf("set-time-profile %s %d %s %s %s %d",
                         $device_id, $profile_id, '2020-01-01:2099-12-31', $weekdays, $spans_string, $linked_profile_id
                     );
+                    $command = fsbhoa_uhppote_cli_command($args);
 
                     if ($is_dry_run) {
                         error_log("DRY RUN (PROFILE): " . $command);
@@ -221,7 +221,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                         error_log("SYNC SERVICE (PROFILE): $command");
                         $success = false;
                         for ($i = 0; $i < $retry_attempts; $i++) {
-                            $output = shell_exec($command . " 2>&1");
+                            $output = fsbhoa_uhppote_cli_exec($device_id, $args);
                             if (strpos($output, 'false') === false && strpos($output, 'ERROR') === false) {
                                 $success = true; break;
                             }
@@ -252,17 +252,17 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                     // Ensure delay is valid (default to 3 if missing or out of bounds)
                     $delay = (isset($door->door_delay) && $door->door_delay > 0 && $door->door_delay <= 60) ? intval($door->door_delay) : 3;
 
-                    $delay_cmd = sprintf(
-                        "uhppote-cli set-door-delay %s %d %d 2>&1",
+                    $delay_args = sprintf(
+                        "set-door-delay %s %d %d",
                         escapeshellarg($device_id),
                         $door_num,
                         $delay
                     );
 
                     if ($is_dry_run) {
-                        error_log("DRY RUN (DELAY): " . $delay_cmd);
+                        error_log("DRY RUN (DELAY): " . fsbhoa_uhppote_cli_command($delay_args));
                     } else {
-                        $output = shell_exec($delay_cmd);
+                        $output = fsbhoa_uhppote_cli_exec($device_id, $delay_args);
                         if (strpos($output, 'ERROR') !== false) {
                             error_log("SYNC FAILED (DELAY) for Door $door_num on $device_id: " . trim($output));
                         } else {
@@ -345,13 +345,14 @@ function fsbhoa_execute_task_sync($device_id, $controller_id, $active_schedule_i
     ));
     error_log("TASK SYNC DEBUG: Found " . count($tasks) . " tasks for Schedule ID: $active_schedule_id");
 
-    $clear_task_list_command = sprintf('uhppote-cli clear-task-list %s 2>&1', $device_id);
+    $clear_task_list_args = sprintf('clear-task-list %s', $device_id);
+    $clear_task_list_command = fsbhoa_uhppote_cli_command($clear_task_list_args);
     
     // DEBUG: Wiping Tasks
     error_log("SYNC SERVICE: Refreshing tasks on controller $device_id");
 
     if (!$is_dry_run) {
-        $output_clear_tasks = shell_exec($clear_task_list_command);
+        $output_clear_tasks = fsbhoa_uhppote_cli_exec($device_id, $clear_task_list_args);
         if (strpos($output_clear_tasks, 'false') !== false || strpos($output_clear_tasks, 'ERROR') !== false) {
             error_log("SYNC WARNING (CLEAR TASKS) for $device_id: $output_clear_tasks");
         } else {
@@ -382,13 +383,14 @@ function fsbhoa_execute_task_sync($device_id, $controller_id, $active_schedule_i
             }
 
             foreach ($doors_to_set as $door) {
-                $add_task_command = sprintf('uhppote-cli add-task %s %s %d %s:%s %s %s 0',
+                $add_task_args = sprintf('add-task %s %s %d %s:%s %s %s 0',
                     $device_id, $task_description, $door, $valid_from, $valid_to, $weekdays, substr($task->start_time, 0, 5));
+                $add_task_command = fsbhoa_uhppote_cli_command($add_task_args);
                 if ($is_dry_run) {
                     error_log("DRY RUN (TASK): " . $add_task_command);
                 } else {
                     for ($i = 0; $i < $retry_attempts; $i++) {
-                        $output = shell_exec($add_task_command . " 2>&1");
+                        $output = fsbhoa_uhppote_cli_exec($device_id, $add_task_args);
                         if (strpos($output, 'false') === false && strpos($output, 'ERROR') === false) {
                             error_log("SYNC Updated Task: " . $add_task_command);
                             break;
@@ -401,9 +403,10 @@ function fsbhoa_execute_task_sync($device_id, $controller_id, $active_schedule_i
         }
     }
     
-    $refresh_task_list_command = sprintf('uhppote-cli refresh-task-list %s 2>&1', $device_id);
+    $refresh_task_list_args = sprintf('refresh-task-list %s', $device_id);
+    $refresh_task_list_command = fsbhoa_uhppote_cli_command($refresh_task_list_args);
     if (!$is_dry_run) {
-        $output_refresh_tasks = shell_exec($refresh_task_list_command);
+        $output_refresh_tasks = fsbhoa_uhppote_cli_exec($device_id, $refresh_task_list_args);
         if (strpos($output_refresh_tasks, 'false') !== false || strpos($output_refresh_tasks, 'ERROR') !== false) {
              error_log("SYNC FAILED (REFRESH TASKS) for $device_id: $output_refresh_tasks");
         } else {
@@ -481,12 +484,11 @@ function fsbhoa_perform_daily_time_sync() {
     }
 
     foreach ($controllers as $controller) {
-        $status_command = sprintf('uhppote-cli --timeout 2s get-status %s', $controller->uhppoted_device_id);
-        $status_output = shell_exec($status_command . " 2>&1");
+        $status_output = fsbhoa_uhppote_cli_exec($controller->uhppoted_device_id, sprintf('get-status %s', $controller->uhppoted_device_id), '--timeout 2s');
 
         if (strpos($status_output, 'ERROR') === false && !empty(trim($status_output))) {
             error_log("DAILY TIME SYNC: Setting time on " . $controller->friendly_name);
-            shell_exec(sprintf('uhppote-cli set-time %s 2>&1', $controller->uhppoted_device_id));
+            fsbhoa_uhppote_cli_exec($controller->uhppoted_device_id, sprintf('set-time %s', $controller->uhppoted_device_id));
         } else {
             error_log("DAILY TIME SYNC: Controller " . $controller->friendly_name . " is offline. Skipping.");
         }

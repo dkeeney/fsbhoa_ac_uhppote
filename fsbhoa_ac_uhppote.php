@@ -51,6 +51,8 @@ function fsbhoa_uhppote_init() {
 
     }
     // Load modules needed in the front-end.
+    // All uhppote-cli commands go through these helpers (generated --config, fail closed).
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-cli.php';
     // The UI Bridge registers the hardware filters that core's monitor REST API calls
     // (/wp-json is not admin, AJAX or cron), and its group status uses the Compiler.
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php';

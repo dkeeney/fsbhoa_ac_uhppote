@@ -61,8 +61,8 @@ class Fsbhoa_Uhppote_Hardware_UI {
 
         if (!$door_info) { return $handled; } // Not a door we know about
 
-        $command = sprintf('uhppote-cli set-door-control %s %s %s', escapeshellarg($door_info->uhppoted_device_id), escapeshellarg($door_info->door_number_on_controller), escapeshellarg($state_string));
-        $output = shell_exec($command . " 2>&1");
+        $args = sprintf('set-door-control %s %s %s', escapeshellarg($door_info->uhppoted_device_id), escapeshellarg($door_info->door_number_on_controller), escapeshellarg($state_string));
+        $output = fsbhoa_uhppote_cli_exec($door_info->uhppoted_device_id, $args);
 
         if (strpos($output, 'ERROR') === false) {
             // Nudge the local Go event_service to poll immediately

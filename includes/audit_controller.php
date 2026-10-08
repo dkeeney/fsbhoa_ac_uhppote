@@ -1,4 +1,7 @@
 <?php
+// Command-line diagnostic only: run with `php includes/audit_controller.php`. It prints card numbers.
+if ( php_sapi_name() !== 'cli' ) { exit; }
+
 // Load WordPress environment
 require_once( '/var/www/html/wp-load.php' );
 require_once( FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php' );
@@ -14,7 +17,7 @@ $desired_cards = $sync_artifacts['cards'];
 
 // 2. Fetch live cards from hardware
 echo "Querying live cards from controller $device_id...\n";
-$output = shell_exec("uhppote-cli get-cards $device_id 2>&1");
+$output = fsbhoa_uhppote_cli_exec($device_id, "get-cards $device_id");
 $lines = explode("\n", trim((string)$output));
 
 $hardware_cards = [];
@@ -46,7 +49,7 @@ foreach ($hardware_cards as $rfid => $data) {
 }
 echo "Verifying referenced time profiles on controller...\n";
 foreach (array_keys($referenced_profiles) as $pid) {
-    $p_out = shell_exec("uhppote-cli get-time-profile $device_id $pid 2>&1");
+    $p_out = fsbhoa_uhppote_cli_exec($device_id, "get-time-profile $device_id $pid");
     if (strpos((string)$p_out, 'ERROR') !== false || empty(trim((string)$p_out))) {
         echo "  [!] PROFILE ERROR: Profile $pid is used but uhppote returned: $p_out\n";
     } else {

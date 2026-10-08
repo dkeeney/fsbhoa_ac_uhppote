@@ -417,6 +417,9 @@ class Fsbhoa_Controller_Actions {
             
             file_put_contents( $config_path, $json_output );
         }
+
+        // Keep the uhppote-cli config in step with controllers.json
+        fsbhoa_uhppote_write_cli_config();
     }
 
     /**
@@ -442,8 +445,7 @@ class Fsbhoa_Controller_Actions {
         }
 
         // Execute the command
-        $command = sprintf('uhppote-cli restore-default-parameters %s', escapeshellarg($serial_number));
-        shell_exec($command . " 2>&1");
+        fsbhoa_uhppote_cli_exec($serial_number, sprintf('restore-default-parameters %s', escapeshellarg($serial_number)));
 
         // Activate the sync banner by logging a pending change
         fsbhoa_log_pending_change('controller', $controller_id);
