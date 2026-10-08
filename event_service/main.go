@@ -78,6 +78,8 @@ func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
+	loadEventQueue() // events not yet logged before a restart
+	go runEventQueue()
 	go hub.run()
 	go watchConfigFile(u) // This will do the initial load and set listeners
 	go pollGateStatus(u)
@@ -205,7 +207,7 @@ func testEventHandler(hub *Hub, listener *EventMonitor) http.HandlerFunc {
 
 		var reasonCode uint8 = 1 // Default to 'Swipe'
 		if !granted {
-			reasonCode = 5 // If denied, use 'Denied: Outside Allowed Hours'
+			reasonCode = 8 // If denied, use 'Denied: Outside Allowed Hours'
 		}
 
 		status := types.Status{

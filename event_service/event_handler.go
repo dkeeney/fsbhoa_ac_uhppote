@@ -71,9 +71,9 @@ func (m *EventMonitor) OnEvent(status *types.Status) {
 		Reason:       event.Reason,
 	}
 
-	// Log event  to the database in the background
-    // this will also result in a notification being sent to monitor.
-    logEventToWordPress(rawEvent, eventMessage);
+	// Queue the event for WordPress (saved to disk first, retried until logged).
+	// Logging it also notifies the monitor.
+	enqueueEvent(rawEvent, eventMessage)
 
 }
 
@@ -92,11 +92,11 @@ func (m *EventMonitor) OnError(err error) bool {
 }
 
 
-// logEventToWordPress sends the raw event details to a WordPress endpoint to be logged.
-func logEventToWordPress(event RawHardwareEvent, eventMessage string) {
+// logEventToWordPress sends one event to WordPress's /monitor/log-event. It returns nil once
+// WordPress has logged it, errDropEvent if WordPress rejects the data (HTTP 400), and any other
+// error when it should be retried (network, timeout, 5xx, wrong key, ...).
+func logEventToWordPress(event RawHardwareEvent, eventMessage string, receivedAt string) error {
 	apiURL := fmt.Sprintf("%s/wp-json/fsbhoa/v1/monitor/log-event", config.WpURL)
-
-    fmt.Println(">>>> logEventToWordPress was called!")
 
 	if config.Debug {
 		log.Printf("DEBUG LOGGING: Preparing POST request to %s", apiURL)
@@ -109,16 +109,15 @@ func logEventToWordPress(event RawHardwareEvent, eventMessage string) {
 		"Granted":      event.Granted,
 		"Reason":       event.Reason,
 		"EventMessage": eventMessage,
+		"Timestamp":    receivedAt, // when this service received it, so a retried event keeps its time
 	})
 	if err != nil {
-		log.Printf("ERROR LOGGING: Failed to create JSON for event log: %v", err)
-		return
+		return fmt.Errorf("%w: could not encode JSON: %v", errDropEvent, err)
 	}
 
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(postBody))
 	if err != nil {
-		log.Printf("ERROR LOGGING: Failed to create POST request: %v", err)
-		return
+		return fmt.Errorf("could not create POST request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-KEY", config.APIKey) // /monitor/log-event requires the Access Verification API Key
@@ -127,23 +126,25 @@ func logEventToWordPress(event RawHardwareEvent, eventMessage string) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	client := &http.Client{Timeout: 10 * time.Second, Transport: tr}
-	if config.Debug {
-		log.Printf("DEBUG LOGGING: sending POST request")
-	}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("ERROR LOGGING: Failed to send event to WordPress log: %v", err)
-		return
+		return fmt.Errorf("could not send event to WordPress: %v", err)
 	}
 	defer resp.Body.Close()
 
-	responseBody, bodyErr := io.ReadAll(resp.Body)
-	if bodyErr != nil {
-		log.Printf("ERROR LOGGING: Could not read response body: %v", bodyErr)
-		return
+	responseBody, _ := io.ReadAll(resp.Body)
+	if config.Debug {
+		log.Printf("DEBUG LOGGING: Response from Log Endpoint -- Status: %s, Body: %s", resp.Status, string(responseBody))
 	}
-	log.Printf("DEBUG LOGGING: Response from Log Endpoint -- Status: %s, Body: %s", resp.Status, string(responseBody))
 
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return nil
+	case resp.StatusCode == http.StatusBadRequest:
+		return fmt.Errorf("%w: %s %s", errDropEvent, resp.Status, string(responseBody))
+	default:
+		return fmt.Errorf("WordPress returned %s: %s", resp.Status, string(responseBody))
+	}
 }
 
 // toLocalTime converts a UTC time to a formatted string in the server's local time zone.
