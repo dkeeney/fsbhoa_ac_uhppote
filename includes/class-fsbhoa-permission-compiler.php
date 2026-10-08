@@ -132,11 +132,25 @@ class Fsbhoa_Permission_Compiler {
         }
 
         // Groups & Permissions (filtered by Active Schedule)
+        // A disabled group grants no permissions, so only rules of enabled groups are loaded.
         $this->raw_data['groups'] = $wpdb->get_results("SELECT * FROM ac_groups WHERE is_enabled = 1", OBJECT_K);
-        $this->raw_data['permissions'] = $wpdb->get_results($wpdb->prepare("
-            SELECT * FROM ac_group_permissions 
-            WHERE is_enabled = 1 AND schedule_id = %d
+        $permissions = $wpdb->get_results($wpdb->prepare("
+            SELECT p.* FROM ac_group_permissions p
+            JOIN ac_groups g ON g.group_id = p.group_id AND g.is_enabled = 1
+            WHERE p.is_enabled = 1 AND p.schedule_id = %d
         ", $this->schedule_id));
+
+        // Drop rules with an invalid time span once here (logged once), rather than
+        // failing the whole sync. Rules with no days ticked are kept: a gate-specific
+        // rule with no days still overrides broader rules, which denies that gate.
+        $this->raw_data['permissions'] = [];
+        foreach ($permissions as $perm) {
+            if (self::rule_span_minutes($perm) === null) {
+                error_log("PERMISSION COMPILER: Skipping rule {$perm->permission_id} (group {$perm->group_id}): invalid time span {$perm->start_time}-{$perm->end_time}. Times can't cross midnight; use 00:00 as the end for end of day.");
+                continue;
+            }
+            $this->raw_data['permissions'][] = $perm;
+        }
 
         // Cards & Memberships
         $this->raw_data['cards'] = $wpdb->get_results("
@@ -147,7 +161,13 @@ class Fsbhoa_Permission_Compiler {
             AND cred.status IN ('active', 'disabled')
         ");
         
-        $memberships = $wpdb->get_results("SELECT cardholder_id, group_id FROM ac_cardholder_groups");
+        // Memberships in disabled groups are ignored, so they don't create extra signatures
+        $memberships = $wpdb->get_results("
+            SELECT cg.cardholder_id, cg.group_id
+            FROM ac_cardholder_groups cg
+            JOIN ac_groups g ON g.group_id = cg.group_id AND g.is_enabled = 1
+        ");
+        $this->raw_data['memberships'] = []; // load_data() runs again on a defrag retry
         foreach($memberships as $m) {
             $this->raw_data['memberships'][$m->cardholder_id][] = $m->group_id;
         }
@@ -438,16 +458,10 @@ class Fsbhoa_Permission_Compiler {
             if ($r->on_fri) $days[] = 'Fri';
             if ($r->on_sat) $days[] = 'Sat';
 
-            // Convert to timestamps for math
-            $start = strtotime($r->start_time);
-            $end = strtotime($r->end_time);
-
-            // Validation for Midnight Overlap (GUI should catch this, but we verify here)
-            if ($end < $start) {
-                throw new Exception("Compiler Error: Time span {$r->start_time}-{$r->end_time} spans midnight or is invalid.");
-            }
-
-            $span = [$start, $end];
+            // Minutes since midnight (not timestamps, which shift on DST change days).
+            // Invalid spans were already dropped in load_data().
+            $span = self::rule_span_minutes($r);
+            if ($span === null) continue;
             foreach ($days as $d) { 
                 $by_day[$d][] = $span; 
             }
@@ -465,8 +479,8 @@ class Fsbhoa_Permission_Compiler {
             $merged = $this->merge_timestamps($by_day[$d]);
 
             $span_strings = [];
-            foreach ($merged as $m) { 
-                $span_strings[] = date('H:i', $m[0]) . '-' . date('H:i', $m[1]); 
+            foreach ($merged as $m) {
+                $span_strings[] = sprintf('%02d:%02d-%02d:%02d', intdiv($m[0], 60), $m[0] % 60, intdiv($m[1], 60), $m[1] % 60);
             }
             $span_sig = implode(',', $span_strings);
 
@@ -478,6 +492,36 @@ class Fsbhoa_Permission_Compiler {
             $final_schedule[$day_sig] = explode(',', $span_sig);
         }
         return $final_schedule;
+    }
+
+    /**
+     * Converts a rule's start/end times to [start, end] in minutes since midnight.
+     * An end of 00:00 means end of day (the GUI allows it) and becomes 23:59, the
+     * last minute a controller time segment can hold.
+     *
+     * @return array|null [start, end], or null if a time is unreadable or the end
+     *                    isn't after the start (a span can't cross midnight).
+     */
+    private static function rule_span_minutes($rule) {
+        $start = self::time_to_minutes($rule->start_time);
+        $end   = self::time_to_minutes($rule->end_time);
+        if ($start === null || $end === null) return null;
+
+        if ($end === 0 || $end >= 1440) $end = 1439; // End of day
+        if ($end <= $start) return null;
+
+        return [$start, $end];
+    }
+
+    /**
+     * Parses "HH:MM" or "HH:MM:SS" into minutes since midnight, or null if unreadable.
+     */
+    private static function time_to_minutes($time) {
+        if (!preg_match('/^(\d{1,2}):(\d{2})/', trim((string)$time), $m)) return null;
+        $h = (int)$m[1];
+        $i = (int)$m[2];
+        if ($h > 24 || $i > 59) return null;
+        return $h * 60 + $i;
     }
 
     /**
@@ -497,8 +541,8 @@ class Fsbhoa_Permission_Compiler {
         for ($i = 1; $i < count($ranges); $i++) {
             $next = $ranges[$i];
             
-            // If the next span starts before/at the current span ends, merge them
-            if ($next[0] <= $curr[1] +60) {
+            // If the next span starts before/at the current span ends (or the minute after), merge them
+            if ($next[0] <= $curr[1] + 1) {
                 $curr[1] = max($curr[1], $next[1]);
             } else {
                 $merged[] = $curr;

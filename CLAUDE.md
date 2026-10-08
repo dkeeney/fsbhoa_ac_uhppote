@@ -19,6 +19,9 @@ This plugin supports UHPPOTE professional access controllers. The models come in
 - A cardholder's access comes from their group. Every cardholder belongs to at least one group.
 - Each group sets the time spans when its members can use each gate.
 - A permission can name a gate in one of three ways: all gates, all gates on one controller, or one gate by name.
+- **Time spans can't cross midnight.** An end time of 00:00 means end of day and is sent to the controller as 23:59 (the schedule form allows it). A rule whose end isn't after its start is skipped with a log line.
+- **A disabled group grants nothing**, and its memberships are ignored.
+- A gate-specific rule with no days ticked still overrides the group's broader rules for that gate, so it denies access there (the testbed's Resident group uses this for the EqmtRm Door).
 - **Within one group**, the most specific entry for a gate replaces the broader ones: a named gate beats its controller, and a controller beats all gates. The broader entry no longer applies to that gate.
 - **Across groups**, permissions add up. A cardholder in more than one group can use a gate whenever any of their groups allows it.
 
