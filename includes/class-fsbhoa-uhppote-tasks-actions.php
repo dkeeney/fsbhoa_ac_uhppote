@@ -16,6 +16,7 @@ class Fsbhoa_Schedule_Tasks_Actions {
         $schedule_id = isset($_POST['schedule_id']) ? absint($_POST['schedule_id']) : 1;
 
         check_admin_referer($is_update ? 'fsbhoa_update_task_' . $item_id : 'fsbhoa_add_task', '_wpnonce');
+        if (!current_user_can('manage_options')) { wp_die('Permission Denied.'); }
 
         $adapt_to = sanitize_text_field($_POST['adapt_to']);
         list($type, $id_from_form) = explode('-', $adapt_to);

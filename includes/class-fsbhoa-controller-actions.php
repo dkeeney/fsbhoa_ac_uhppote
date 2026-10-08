@@ -21,6 +21,7 @@ class Fsbhoa_Controller_Actions {
 
 		$nonce_action = $is_update ? 'fsbhoa_update_controller_' . $item_id : 'fsbhoa_add_controller';
 		check_admin_referer($nonce_action, '_wpnonce');
+		if (!current_user_can('manage_options')) { wp_die('Permission Denied.'); }
 
 		$errors = [];
 		$submitted_ip = sanitize_text_field($_POST['ip_address']);
@@ -153,6 +154,7 @@ class Fsbhoa_Controller_Actions {
     public function handle_delete_action() {
         $item_id = absint($_GET['controller_id']);
         check_admin_referer('fsbhoa_delete_controller_nonce_' . $item_id, '_wpnonce');
+        if (!current_user_can('manage_options')) { wp_die('Permission Denied.'); }
 
         global $wpdb;
         $table_name = 'ac_controllers';
@@ -213,6 +215,9 @@ class Fsbhoa_Controller_Actions {
      */
     public function ajax_handle_sync_all() {
         check_ajax_referer('fsbhoa_sync_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permission denied.', 403);
+        }
 
         // First, check if a sync is already scheduled or running to prevent duplicates.
         if (wp_next_scheduled('fsbhoa_run_background_sync')) {
@@ -238,6 +243,9 @@ class Fsbhoa_Controller_Actions {
      */
     public function ajax_get_sync_status() {
         check_ajax_referer('fsbhoa_sync_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permission denied.', 403);
+        }
 
         global $wpdb;
         $count = $wpdb->get_var("SELECT COUNT(*) FROM ac_pending_changes");
@@ -388,6 +396,9 @@ class Fsbhoa_Controller_Actions {
      */
     public function ajax_trigger_nightly_rebuild() {
         check_ajax_referer('fsbhoa_rebuild_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permission denied.', 403);
+        }
 
 
         // Set the initial transient so the sync banner appears immediately on page reload.

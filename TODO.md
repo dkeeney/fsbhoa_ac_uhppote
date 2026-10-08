@@ -45,7 +45,7 @@ Controllers: **testbed** .53 (425043852) and .54 (not yet connected); **producti
 ## Security
 
 - [x] **17. Anyone on the network can create fake gate events.** The event service's `/test_event` (port 8083, all interfaces) has no authentication, and the `enableTestStub` setting is written to the config but never checked. Core's `/monitor/log-event` is open to anyone (`__return_true`). So are several other monitor routes, including `/monitor/cardholder-summary`, which returns cardholder details. Check `enableTestStub`, require a shared key between the services, and restrict the read routes to logged-in users. **Done 2026-10-08:** `/monitor/log-event` and `/monitor/event` require the Access Verification API Key (`X-API-KEY`); the monitor's browser routes require a logged-in admin with the REST nonce; `/test_event` requires `enableTestStub` and the key. `/trigger-poll` (only starts a status poll) is still open.
-- [ ] **18. Some actions check only a nonce, not the user's role.** `class-fsbhoa-controller-actions.php`: controller save and delete, Sync Now. `class-fsbhoa-uhppote-tasks-actions.php`: task save. Factory reset, Force Full Rebuild and task delete do check `manage_options`.
+- [x] **18. Some actions check only a nonce, not the user's role.** `class-fsbhoa-controller-actions.php`: controller save and delete, Sync Now. `class-fsbhoa-uhppote-tasks-actions.php`: task save. Factory reset, Force Full Rebuild and task delete do check `manage_options`. **Done 2026-10-08:** these, plus Sync status and the unused rebuild handler (#20), now require `manage_options`. Every admin-post and AJAX handler in this plugin checks it.
 
 ## Plugin structure
 
