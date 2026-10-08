@@ -62,6 +62,10 @@ function fsbhoa_uhppote_init() {
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-ui.php';
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-diagnostics.php';
 
+    // Gate task save/delete handlers (core used to create this; it must not know extension classes)
+    if ( class_exists( 'Fsbhoa_Schedule_Tasks_Actions' ) ) {
+        new Fsbhoa_Schedule_Tasks_Actions();
+    }
     if ( class_exists( 'Fsbhoa_Uhppote_Diagnostics' ) ) {
         new Fsbhoa_Uhppote_Diagnostics();
 }

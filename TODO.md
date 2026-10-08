@@ -49,7 +49,7 @@ Controllers: **testbed** .53 (425043852) and .54 (not yet connected); **producti
 
 ## Plugin structure
 
-- [ ] **19. Core creates a class from this plugin.** `fsbhoa_ac_core/fsbhoa-ac-core.php:227` does `new Fsbhoa_Schedule_Tasks_Actions()`, which is defined here. This breaks core rule 1. Create it in this plugin and remove those lines from core.
+- [x] **19. Core creates a class from this plugin.** `fsbhoa_ac_core/fsbhoa-ac-core.php:227` does `new Fsbhoa_Schedule_Tasks_Actions()`, which is defined here. This breaks core rule 1. Create it in this plugin and remove those lines from core. **Done 2026-10-08:** created in `fsbhoa_uhppote_init()`; removed from core. Deploy core and uhppote together, or the task save/delete handlers are registered twice (old core) or not at all (old uhppote).
 - [ ] **20. Dead code to remove.** (The discovery module was removed 2026-10-08; setting an IP address moved to `Fsbhoa_Controller_Actions::set_controller_ip()`.)
   - `deploy_uhppote.sh` (already marked dead in CLAUDE.md).
   - `ajax_trigger_nightly_rebuild` (nothing calls it).
