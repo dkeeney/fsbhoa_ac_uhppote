@@ -131,6 +131,7 @@ class Fsbhoa_Uhppote_Settings {
             'logFile'           => sanitize_text_field(get_option('fsbhoa_ac_event_log_path', '')),
             'debug'             => (get_option('fsbhoa_ac_debug_mode', 'on') === 'on'),
             'enableTestStub'    => (get_option('fsbhoa_ac_test_stub', 'on') === 'on'),
+            'apiKey'            => get_option('fsbhoa_ac_verify_api_key', ''), // Access Verification API Key (core General settings)
             'monitorServiceURL' => sprintf('%s://%s:%d', $protocol, $wp_host, absint($monitor_port)),
             'pool_alarm'        => [
                 'enabled'       => (get_option('fsbhoa_pool_alarm_enabled', '0') === '1'),

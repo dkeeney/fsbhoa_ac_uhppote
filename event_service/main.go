@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -50,7 +51,11 @@ func main() {
 
 	log.Println("----------------------------------------------------")
 	log.Printf("INFO: FSBHOA Event Service starting...")
-	log.Printf("CONFIG LOADED: %+v\n", config)
+	logged := config
+	if logged.APIKey != "" {
+		logged.APIKey = "(set)" // keep the key out of the log
+	}
+	log.Printf("CONFIG LOADED: %+v\n", logged)
 
 	// 3. Initialize UHPPOTE interface
 	listenAddressString := fmt.Sprintf("%s:%d", config.CallbackHost, config.ListenPort)
@@ -161,6 +166,17 @@ func testEventHandler(hub *Hub, listener *EventMonitor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if config.Debug {
 			log.Println("DEBUG: Received request on /test_event endpoint.")
+		}
+
+		// Test events are fake swipes: only when the test stub is enabled, and only
+		// for callers with the Access Verification API Key.
+		if !config.EnableTestStub {
+			http.Error(w, "Test events are disabled (enableTestStub is off).", http.StatusForbidden)
+			return
+		}
+		if config.APIKey == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-API-KEY")), []byte(config.APIKey)) != 1 {
+			http.Error(w, "Invalid or missing API key.", http.StatusForbidden)
+			return
 		}
 
 		var payload struct {

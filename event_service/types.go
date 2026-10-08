@@ -17,6 +17,8 @@ type Config struct {
 	LogFile           string `json:"logFile"`
 	Debug             bool   `json:"debug"`
 	MonitorServiceURL string `json:"monitorServiceURL"`
+	EnableTestStub    bool   `json:"enableTestStub"` // /test_event is refused unless this is on
+	APIKey            string `json:"apiKey"`         // Access Verification API Key: sent to WordPress, required on /test_event
 }
 
 // DoorConfig matches a single door object within the new config file.

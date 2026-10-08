@@ -81,7 +81,8 @@ All sync entry points are in `includes/fsbhoa-uhppote-sync-service.php`.
 ## Events
 
 - Each controller is configured with a callback IP address and port (`uhppote-cli set-listener`, from the Event Callback Host setting). When it sees a swipe, it sends the event there.
-- The event service (`event_service/`, Go, binary `fsbhoa_events`) receives the event and posts it to a REST API in core.
+- The event service (`event_service/`, Go, binary `fsbhoa_events`) receives the event and posts it to core's `/monitor/log-event`, sending the Access Verification API Key (`apiKey` in `event_service.json`) as `X-API-KEY`.
+- The event service's `/test_event` (fake swipes for the test suite) works only when `enableTestStub` is on, and requires the same key.
 - Core records the event in the database and tells the real-time monitor to fetch it from there.
 
 ## Gate tasks (green / red / yellow)

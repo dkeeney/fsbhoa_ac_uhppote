@@ -121,6 +121,7 @@ func logEventToWordPress(event RawHardwareEvent, eventMessage string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-KEY", config.APIKey) // /monitor/log-event requires the Access Verification API Key
 
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},

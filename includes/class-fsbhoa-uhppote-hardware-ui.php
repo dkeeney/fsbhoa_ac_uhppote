@@ -176,7 +176,7 @@ class Fsbhoa_Uhppote_Hardware_UI {
 
         $response = wp_remote_post($url, [
             'method'    => 'POST',
-            'headers'   => ['Content-Type' => 'application/json; charset=utf-8'],
+            'headers'   => ['Content-Type' => 'application/json; charset=utf-8', 'X-API-KEY' => get_option('fsbhoa_ac_verify_api_key', '')],
             'body'      => json_encode($body),
             'sslverify' => false,
             'timeout'   => 5
@@ -205,7 +205,7 @@ class Fsbhoa_Uhppote_Hardware_UI {
 
         $response = wp_remote_post($url, [
             'method'    => 'POST',
-            'headers'   => ['Content-Type' => 'application/json'],
+            'headers'   => ['Content-Type' => 'application/json', 'X-API-KEY' => get_option('fsbhoa_ac_verify_api_key', '')],
             'body'      => $payload_json,
             'sslverify' => false,
             'timeout'   => 5
