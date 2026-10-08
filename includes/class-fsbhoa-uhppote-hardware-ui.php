@@ -161,7 +161,7 @@ class Fsbhoa_Uhppote_Hardware_UI {
                 'controller_record_id'      => $controller_id,
                 'door_number_on_controller' => 254,
                 'friendly_name'             => 'Regression Test System Door',
-                'door_role'                 => 'KIOSK',
+                'door_role'                 => 'TEST', // Hidden from the live monitor map
             ] );
 
             $serial_number = 88888888;

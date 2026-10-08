@@ -29,8 +29,7 @@ function fsbhoa_uhppote_init() {
     // ONLY load the heavy lifting if we are in the admin dashboard, 
     // running AJAX, or running a background Cron job
     if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
-        // Load the Compiler and Sync Services
-        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php';
+        // Load the Sync Services
         require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-discovery.php';
         require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-bulk-sync.php';
         require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-sync-service.php';
@@ -47,14 +46,15 @@ function fsbhoa_uhppote_init() {
             new Fsbhoa_Gate_Actions();
         }
 
-        // Load the UI Bridge
-        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-hardware-ui.php';
-
         // Load the Settings Bridge
         require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-settings.php';
 
     }
     // Load modules needed in the front-end.
+    // The UI Bridge registers the hardware filters that core's monitor REST API calls
+    // (/wp-json is not admin, AJAX or cron), and its group status uses the Compiler.
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php';
+    require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-hardware-ui.php';
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-group-ui.php';
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-credentials.php';
     require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-uhppote-tasks-actions.php';

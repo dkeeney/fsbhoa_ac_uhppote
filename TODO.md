@@ -16,6 +16,13 @@ V2 has two separate statuses:
   - Also check other plugins that filter credentials only by their own status. DoorKing's export (`fsbhoa_ac_doorking/includes/class-fsbhoa-doorking-export.php:201`, `:206`) does this for household vehicle credentials.
   - Decide what to do with the existing blank-status credentials. Their original status was lost when they were archived.
 
+## Live monitor map
+
+- [x] **6. Hide system doors from the live monitor map.** "Regression Test System Door" (controller 88888888) and "Admin Override" (virtual kiosk 900000) are doors in the database but shouldn't appear on the map. The map's door list comes from core (`fsbhoa_ac_core/includes/monitor/class-fsbhoa-monitor-rest-api.php`, query near line 108). Decide how to mark them: by `door_role`, by controller type, or a new "show on map" flag. Both currently have `map_x`/`map_y` of 0.
+- [x] **7. Clicking a gate dot doesn't open the door-control dialog.** Two things need fixing:
+  - In core, `handleGateClick()` exists in `fsbhoa_ac_core/assets/js/fsbhoa-live-monitor.js` (line 152) but isn't attached to anything. Commit `4bc136d` removed `mapContainer.addEventListener('click', handleGateClick);`. Put it back.
+  - In this plugin, the `fsbhoa_hardware_set_door_state` filter isn't registered for REST requests. `class-fsbhoa-uhppote-hardware-ui.php` is loaded only for admin, AJAX and cron (`fsbhoa_ac_uhppote.php:31`), and `/wp-json` is none of those. Once the dialog works, sending a command would fail with "No hardware plugin is configured to handle this door" (HTTP 501). The same applies to `fsbhoa_hardware_group_status` and `fsbhoa_hardware_map_event_data`. Load the hardware UI file (and the compiler it uses) for REST requests too.
+
 ## Other
 
 - [ ] **5. Regression Test Controller has a blank type.** `class-fsbhoa-uhppote-hardware-ui.php` creates it with `type = 'REGRESSION_TEST'`, which isn't in the `ac_controllers.type` enum (`UHPPOTE`, `VIRTUAL_KIOSK`), so it's stored blank (controller 88888888 on the testbed). Add the value to the enum or use an existing type. Core had an unused copy of this code, removed 2026-10-07.

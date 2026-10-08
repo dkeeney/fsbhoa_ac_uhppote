@@ -418,6 +418,13 @@ function fsbhoa_execute_task_sync($device_id, $controller_id, $active_schedule_i
  * Registers the Nightly Rebuild and Daily Time Sync events.
  * Scheduled 1 minute BEFORE the Linux crontab.
  * Self-heals if the timezone changes or DST boundaries are crossed.
+ *
+ * WP-Cron only runs when a request hits the site, so each server needs a
+ * Linux crontab that requests wp-cron.php just after these times, e.g.:
+ *
+ *  CRON_TZ=America/Los_Angeles
+ *    11 0 * * * wget -q -O - "https://<site-host>/wp-cron.php?doing_wp_cron" > /dev/null 2>&1
+ *    11 3 * * * wget -q -O - "https://<site-host>/wp-cron.php?doing_wp_cron" > /dev/null 2>&1
  */
 function fsbhoa_schedule_sync_events() {
     $tz_string = get_option('timezone_string') ?: 'America/Los_Angeles';
@@ -432,7 +439,13 @@ function fsbhoa_schedule_sync_events() {
 
     foreach ($targets as $hook => $time_str) {
         $next_run_timestamp = wp_next_scheduled($hook);
-        
+
+        // An overdue event is waiting for wp-cron to run it. Leave it alone, or
+        // the reschedule below would delete tonight's run before it happens.
+        if ($next_run_timestamp && $next_run_timestamp <= time()) {
+            continue;
+        }
+
         // Calculate what the "Ideal" next run should be in local time
         $ideal_time = new DateTime('today ' . $time_str, $timezone);
         if ($ideal_time < $now) {
@@ -450,7 +463,8 @@ function fsbhoa_schedule_sync_events() {
         }
     }
 }
-add_action('wp', 'fsbhoa_schedule_sync_events');
+// 'init' (not 'wp'): this file is only loaded for admin, AJAX and cron requests, where 'wp' never fires.
+add_action('init', 'fsbhoa_schedule_sync_events');
 
 
 /**
