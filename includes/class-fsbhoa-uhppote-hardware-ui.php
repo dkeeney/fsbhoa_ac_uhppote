@@ -75,59 +75,16 @@ class Fsbhoa_Uhppote_Hardware_UI {
     // Return the current gate status for the target group.
     // "Given the current time, would this group be able to swipe and enter?"
     public function calculate_group_status($status_map, $target_group_id) {
-        $active_schedule_id = fsbhoa_get_active_schedule_id();
-        $blob = get_option('fsbhoa_profile_persistent_maps', []);
-
-        // Quick Exit: Map out of sync with hardware schedule
-        if (!isset($blob['schedule_id']) || (int)$blob['schedule_id'] !== $active_schedule_id) {
-            return $status_map;
-        }
-
-        // Ensure compiler exists
         if (!class_exists('Fsbhoa_Permission_Compiler')) {
             return $status_map;
         }
-
-        // 3. Prepare the Compiler (Loads translation maps into memory)
-        $compiler = new Fsbhoa_Permission_Compiler($active_schedule_id);
-        $preview = $compiler->get_preview_for_group($target_group_id);
-
-        $now = current_time('H:i');
-        $today = current_time('D');
-
-        // 4. Loop through the Map Blob (The "Hardware Truth")
-        foreach ($blob['maps'] as $serial => $mappings) {
-            foreach ($mappings as $key => $pid) {
-                // Key is "GroupID|DoorNum" (e.g., "3|1")
-                list($sig, $door_num) = explode('|', $key);
-
-                if ($sig != $target_group_id) continue;
-
-                $door_id = $compiler->get_door_id_from_hardware($serial, $door_num);
-                if (!$door_id) continue;
-
-                if ($pid === 1) {
-                    $status_map[$door_id] = true;
-                } elseif ($pid > 1 && isset($preview[$door_id])) {
-                    $is_open = false;
-                    foreach ($preview[$door_id] as $days => $windows) {
-                        if (strpos($days, $today) !== false) {
-                            foreach ($windows as $window) {
-                                list($start, $end) = explode('-', $window);
-                                if ($now >= $start && $now <= $end) {
-                                    $is_open = true;
-                                    break 2;
-                                }
-                            }
-                        }
-                    }
-                    $status_map[$door_id] = $is_open;
-                } else {
-                    $status_map[$door_id] = false;
-                }
-            }
+        // From the group's rules in the active schedule, including all-access groups and groups
+        // no cardholder has on their own. (Gate tasks that lock or open a gate are shown separately.)
+        $compiler = new Fsbhoa_Permission_Compiler(fsbhoa_get_active_schedule_id());
+        $doors = $compiler->get_group_door_status($target_group_id, current_time('D'), current_time('H:i'));
+        foreach ($doors as $door_id => $open) {
+            $status_map[$door_id] = $open;
         }
-
         return $status_map;
     }
 

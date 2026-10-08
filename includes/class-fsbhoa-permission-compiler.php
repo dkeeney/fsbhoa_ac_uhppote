@@ -209,22 +209,11 @@ class Fsbhoa_Permission_Compiler {
         foreach ($this->controllers as $device_id => $doors) {
             foreach ($this->used_signatures as $sig => $group_ids) {
                 
-                // CHECK: Global All Access?
+                // All-access signatures need no profiles: their cards get 'Y' on every door
                 if ($this->has_global_access($group_ids)) continue;
 
                 // Process Each Door
                 foreach ($doors as $door_num => $door_record_id) {
-
-                    // If Global All Access, map it to the Hardcoded Hardware Profile 1 (Always accessable)
-                    if ($this->has_global_access($group_ids)) {
-                        foreach ($doors as $door_num => $door_record_id) {
-                            $map_key = $sig . '|' . $door_num;
-                            $this->persistent_maps[$device_id][$map_key] = 1; 
-                        }
-                        // Don't  build a hardware profile for ID 1
-                        continue; 
-                    }
-                    
                     // A. Resolve Rules (Specificity + Union + Merging)
                     $final_schedule = $this->resolve_rules_for_door($group_ids, $device_id, $door_record_id);
                     if (empty($final_schedule)) continue; 
@@ -610,6 +599,37 @@ class Fsbhoa_Permission_Compiler {
             }
         }
         return $results;
+    }
+
+    /**
+     * Whether a member of this group alone can open each door at the given time, from the group's
+     * rules (the same resolution as the sync). Used by the live monitor's group status.
+     * @param int    $group_id
+     * @param string $day  'Mon'..'Sun'
+     * @param string $hhmm 'HH:MM'
+     * @return array [door_record_id => bool] for every door on the UHPPOTE controllers
+     */
+    public function get_group_door_status($group_id, $day, $hhmm) {
+        $preview = $this->get_preview_for_group($group_id); // loads data
+        $all_access = $this->has_global_access([(int) $group_id]); // false for a disabled group
+
+        $status = [];
+        foreach ($this->controllers as $device_id => $doors) {
+            foreach ($doors as $door_num => $door_record_id) {
+                $open = $all_access;
+                if (!$open && isset($preview[$door_record_id])) {
+                    foreach ($preview[$door_record_id] as $days => $windows) {
+                        if (!in_array($day, explode(',', $days), true)) continue;
+                        foreach ($windows as $window) {
+                            list($start, $end) = explode('-', $window);
+                            if ($hhmm >= $start && $hhmm <= $end) { $open = true; break 2; }
+                        }
+                    }
+                }
+                $status[(int) $door_record_id] = $open;
+            }
+        }
+        return $status;
     }
 
     /**
