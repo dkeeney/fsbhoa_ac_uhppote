@@ -136,8 +136,11 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
     $compiler = new Fsbhoa_Permission_Compiler($active_schedule_id);
     $sync_artifacts = $compiler->generate_sync_data($wipe_memory, $is_dry_run);
     if ($sync_artifacts === false) {
-        set_transient('fsbhoa_sync_status', ['status' => 'failed', 'message' => 'Critical Error: Memory exhausted.'], MINUTE_IN_SECONDS * 10);
-        error_log("CRITICAL SYNC ERROR: Compiler failed (likely memory exhaustion). Aborting sync.");
+        set_transient('fsbhoa_sync_status', ['status' => 'failed', 'message' => 'Critical Error: Time profiles could not be built (out of profile slots or a profile collision). Check logs.'], MINUTE_IN_SECONDS * 10);
+        error_log("CRITICAL SYNC ERROR: Compiler failed (profile memory exhausted or profile collision). Aborting sync; no controller was changed.");
+        if ( function_exists('fsbhoa_send_discord_alert') ) {
+            fsbhoa_send_discord_alert("Controller sync stopped: the time profiles could not be built (out of profile slots or a profile collision). No controller was changed. Please check the error logs.");
+        }
         return;
     }
     $global_profiles   = $sync_artifacts['profiles'];

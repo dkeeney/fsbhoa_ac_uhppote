@@ -226,6 +226,13 @@ class Fsbhoa_Permission_Compiler {
                         $this->persistent_maps[$device_id][$map_key] = $profile_id;
                     }
 
+                    // A stable ID kept from an earlier run may already have been taken by a
+                    // chained profile earlier in this build (stable IDs never repeat, so only a
+                    // chained profile can hold it). Writing both would clobber one on the controller.
+                    if (in_array($profile_id, $this->ids_claimed[$device_id])) {
+                        throw new Exception("Profile Collision on Device $device_id: stable profile $profile_id ($map_key) is already used by a chained profile in this build.");
+                    }
+
                     // Mark as used
                     $this->ids_claimed[$device_id][] = $profile_id;
 
@@ -422,14 +429,19 @@ class Fsbhoa_Permission_Compiler {
                 // Dynamic Tail (Grow DOWN from 254)
                 $pid = $this->dynamic_counters[$device_id]--;
 
-                // CRITICAL: Mark this Tail ID as claimed so the Head allocator 
-                // doesn't bump into it from the other side.
-                $this->ids_claimed[$device_id][] = $pid;
-
                 // Collision Check
                 if ($pid <= self::BASE_ID) {
                      throw new Exception("Memory Exhausted on $device_id: Tails hit the Base ID limit.");
                 }
+                // Tails only count down and never repeat, so a claimed ID here is a stable
+                // (head) profile. Using it would clobber that stable profile on the controller.
+                if (in_array($pid, $this->ids_claimed[$device_id])) {
+                    throw new Exception("Profile Collision on Device $device_id: chained profile $pid would overwrite stable profile $pid.");
+                }
+
+                // CRITICAL: Mark this Tail ID as claimed so the Head allocator
+                // doesn't bump into it from the other side.
+                $this->ids_claimed[$device_id][] = $pid;
             }
     
             $this->controller_profiles[$device_id][$pid] = [
