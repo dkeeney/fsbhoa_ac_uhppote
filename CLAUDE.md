@@ -112,7 +112,7 @@ Setting a new controller's IP address is the one task that needs a broadcast.
 4. Move the controller to its final location anywhere on the network.
 5. Add it in the controller form with its IP address, and add it to `/etc/uhppoted/uhppoted.conf` for manual testing.
 
-The code itself only sends `set-address` to a controller that already has an address (`fsbhoa_set_controller_ip()`, used when a controller is switched to DHCP on save). It goes unicast through the generated config.
+The code itself only sends `set-address` to a controller that already has an address (`Fsbhoa_Controller_Actions::set_controller_ip()`, used when a controller is switched to DHCP on save). It goes unicast through the generated config.
 
 ## Build and deploy
 
@@ -121,8 +121,7 @@ The code itself only sends `set-address` to a controller that already has an add
 
 ## Dead code
 
-These files are no longer used. Don't extend them, and don't use them as examples:
-- `includes/fsbhoa-uhppote-discovery.php`: discovery has been replaced by manual IP assignment.
+This file is no longer used. Don't extend it, and don't use it as an example:
 - `deploy_uhppote.sh`
 
 ## Pitfalls

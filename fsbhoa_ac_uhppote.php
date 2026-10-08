@@ -30,7 +30,6 @@ function fsbhoa_uhppote_init() {
     // running AJAX, or running a background Cron job
     if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
         // Load the Sync Services
-        require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-discovery.php';
         require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-bulk-sync.php';
         require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-sync-service.php';
 
@@ -113,7 +112,6 @@ function fsbhoa_uhppote_admin_assets( $hook ) {
         // 4. Localize JS Variables for AJAX
         wp_localize_script( 'fsbhoa-hardware-admin', 'fsbhoa_hardware_vars', array(
             'ajax_url'        => admin_url( 'admin-ajax.php' ),
-            'discovery_nonce' => wp_create_nonce( 'fsbhoa_discovery_nonce' ),
             'reset_nonce'     => wp_create_nonce( 'fsbhoa_factory_reset_nonce' ),
             'rebuild_nonce'   => wp_create_nonce( 'fsbhoa_rebuild_nonce' )
         ) );

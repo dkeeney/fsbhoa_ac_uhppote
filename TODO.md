@@ -29,7 +29,6 @@ Controllers: **testbed** .53 (425043852) and .54 (not yet connected); **producti
 
 - [ ] **10. Every program-generated controller command should use a generated config.**
   - **PHP: done 2026-10-08.** All `uhppote-cli` calls go through `fsbhoa_uhppote_cli_exec()` (`includes/fsbhoa-uhppote-cli.php`) with the generated `/var/lib/fsbhoa/uhppoted.conf`, and refuse controllers without an address. `load-acl`, its retry `delete-all`, and the diagnostics audit use their own per-controller configs with `--config`. `/etc/uhppoted/uhppoted.conf` is for manual testing only and deliberately lists every controller.
-  - Not converted: `fsbhoa_discover_controllers_udp()` in the dead discovery file still broadcasts `get-devices` (see #20).
   - **Go event service** (`event_service/config.go`): it uses the generated `controllers.json` and unicast for controllers with an IP. But `loadControllerConfig()` throws away the device list on reload (`_, newConfigData, err := getDevicesFromJSON(...)`), so a controller added later, or one whose IP changed, is reached by broadcast or its old address until the service restarts. Rebuild the device list on reload, or restart the service when `controllers.json` changes.
   - **Event service claims listeners without being asked.** At startup and on every reload, `updateListeners()` runs `SetListener` for each new controller in `controllers.json` and clears it for each removed one. It isn't gated by "Enable Scheduled Sync" or by environment. A production controller in the testbed's `ac_controllers` would have its events redirected to the testbed within 30 seconds.
 - [ ] **11. `~/deploy-production.sh` still calls `deploy_uhppote.sh`** (line 73), which is dead code. Replace it with `build.sh` when the full deployment script is written.
@@ -50,9 +49,8 @@ Controllers: **testbed** .53 (425043852) and .54 (not yet connected); **producti
 ## Plugin structure
 
 - [ ] **19. Core creates a class from this plugin.** `fsbhoa_ac_core/fsbhoa-ac-core.php:227` does `new Fsbhoa_Schedule_Tasks_Actions()`, which is defined here. This breaks core rule 1. Create it in this plugin and remove those lines from core.
-- [ ] **20. Dead code to remove:**
-  - `includes/fsbhoa-uhppote-discovery.php` and `deploy_uhppote.sh` (already marked dead in CLAUDE.md). Keep the ability to set a controller's IP address: `fsbhoa_set_controller_ip()` in the discovery file is still used (reverting a controller to DHCP on save), so move it before deleting the file. Setting a *new* controller's address needs a broadcast and is done by hand (see CLAUDE.md, "Setting up a new controller").
-  - The discovery handlers in `class-fsbhoa-controller-actions.php` (`handle_discover_action`, `handle_add_discovered_action`). The second uses an undefined `$controller_id` (line 273).
+- [ ] **20. Dead code to remove.** (The discovery module was removed 2026-10-08; setting an IP address moved to `Fsbhoa_Controller_Actions::set_controller_ip()`.)
+  - `deploy_uhppote.sh` (already marked dead in CLAUDE.md).
   - `ajax_trigger_nightly_rebuild` (nothing calls it).
   - `fsbhoa-live-monitor.js` in core defines `setupEventListClickHandlers()` twice. The second definition wins.
 

@@ -6,7 +6,6 @@ class Fsbhoa_Uhppote_Hardware_UI {
         // Listen for the Core Shortcode Router
         add_action('fsbhoa_hardware_management_view_controllers', [$this, 'render_controllers_page']);
         add_action('fsbhoa_hardware_management_view_gates', [$this, 'render_gates_page']);
-        add_action('fsbhoa_hardware_management_view_discovery-results', [$this, 'render_discovery_results']);
         add_filter('fsbhoa_hardware_set_door_state', [$this, 'execute_door_command'], 10, 3);
         add_filter('fsbhoa_hardware_map_event_data', [$this, 'map_lighting_controller'], 10, 2);
         add_filter('fsbhoa_hardware_group_status', [$this, 'calculate_group_status'], 10, 2);
@@ -28,11 +27,6 @@ class Fsbhoa_Uhppote_Hardware_UI {
         }
     }
 
-    public function render_discovery_results() {
-        if (function_exists('fsbhoa_render_discovery_results_view')) {
-            fsbhoa_render_discovery_results_view();
-        }
-    }
     public function map_lighting_controller($mapped_data, $raw_params) {
         global $wpdb;
 

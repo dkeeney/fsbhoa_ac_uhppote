@@ -14,7 +14,7 @@ class Fsbhoa_Controller_Admin_Page {
                 //case 'controller_added': $message_text = 'Controller added successfully.'; break;
                 //case 'controller_updated': $message_text = 'Controller updated successfully.'; break;
                 //case 'controller_deleted': $message_text = 'Controller deleted successfully.'; break;
-                case 'controller_set_to_dhcp': $message_text = 'Controller has been set to DHCP mode. Please use "Discover Controllers" to find its new IP address.'; break;
+                case 'controller_set_to_dhcp': $message_text = 'Controller has been set to DHCP mode. Find its new IP address (from the DHCP server, or with "uhppote-cli get-devices" on the same subnet) and enter it here. Until then it is skipped by syncs.'; break;
             }
             if ($message_text) {
                 echo '<div class="notice notice-success is-dismissible"><p>' . esc_html($message_text) . '</p></div>';

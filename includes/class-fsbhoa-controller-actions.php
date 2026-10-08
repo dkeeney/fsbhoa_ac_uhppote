@@ -7,8 +7,6 @@ class Fsbhoa_Controller_Actions {
         add_action('admin_post_fsbhoa_add_controller', [ $this, 'handle_form_submission' ]);
         add_action('admin_post_fsbhoa_update_controller', [ $this, 'handle_form_submission' ]);
         add_action('admin_post_fsbhoa_delete_controller', [ $this, 'handle_delete_action' ]);
-        add_action('admin_post_fsbhoa_discover_controllers', [ $this, 'handle_discover_action' ]);
-        add_action('admin_post_fsbhoa_add_discovered_controllers', [ $this, 'handle_add_discovered_action' ]);
         add_action('wp_ajax_fsbhoa_sync_all_controllers', [ $this, 'ajax_handle_sync_all' ]);
         add_action('wp_ajax_fsbhoa_get_sync_status', [ $this, 'ajax_get_sync_status' ]);
         add_action('wp_ajax_fsbhoa_factory_reset', array($this, 'ajax_factory_reset_controller'));
@@ -118,8 +116,7 @@ class Fsbhoa_Controller_Actions {
 			if (FSBHOA_DEBUG_MODE) {
 				error_log("CONTROLLER ACTIONS: Reverting device {$controller_data['uhppoted_device_id']} to DHCP.");
 			}
-			// This function is in 'fsbhoa-uhppote-discovery.php'
-			fsbhoa_set_controller_ip($controller_data['uhppoted_device_id'], '0.0.0.0', '0.0.0.0', '0.0.0.0');
+			$this->set_controller_ip($controller_data['uhppoted_device_id'], '0.0.0.0', '0.0.0.0', '0.0.0.0');
 		}
 
 		// --- Finalize Transaction ---
@@ -183,100 +180,32 @@ class Fsbhoa_Controller_Actions {
     }
 
     /**
-     * Handles the controller discovery process.
+     * Sets a controller's IP address details using uhppote-cli.
+     * Sent unicast to the controller's current address from the generated config
+     * (still the old IP while the controller form is being saved), never broadcast.
+     * Setting a NEW controller's address needs a broadcast and is done by hand
+     * (see CLAUDE.md, "Setting up a new controller").
+     *
+     * @param int    $device_id The controller serial number.
+     * @param string $ip_address The IP address to set.
+     * @param string $netmask The subnet mask to set.
+     * @param string $gateway The gateway address to set.
+     * @return void
      */
-    public function handle_discover_action() {
-        check_admin_referer('fsbhoa_discover_controllers_nonce');
-    
-        $discovered_controllers = fsbhoa_discover_controllers_udp();
+    private function set_controller_ip($device_id, $ip_address, $netmask, $gateway) {
+        $set_address_args = sprintf(
+            'set-address %s %s %s %s',
+            escapeshellarg($device_id),
+            escapeshellarg($ip_address),
+            escapeshellarg($netmask),
+            escapeshellarg($gateway)
+        );
 
-        global $wpdb;
-        $table_name = 'ac_controllers';
-        $db_controllers_raw = $wpdb->get_results("SELECT * FROM {$table_name}", ARRAY_A);
-
-        $db_controllers = [];
-        foreach ($db_controllers_raw as $c) {
-            $db_controllers[$c['uhppoted_device_id']] = $c;
-        }
-    
-        $results = [ 'updated' => [], 'missing' => [], 'new' => [], ];
-    
-        foreach ($discovered_controllers as $discovered) {
-            $device_id = $discovered['device-id'];
-            $ip_address = $discovered['address'];
-    
-            if (isset($db_controllers[$device_id])) {
-                if ($db_controllers[$device_id]['ip_address'] !== $ip_address) {
-                    $wpdb->update($table_name, ['ip_address' => $ip_address], ['uhppoted_device_id' => $device_id]);
-                    $results['updated'][] = [
-                        'friendly_name' => $db_controllers[$device_id]['friendly_name'],
-                        'uhppoted_device_id' => $device_id,
-                        'old_ip' => $db_controllers[$device_id]['ip_address'],
-                        'new_ip' => $ip_address,
-                    ];
-                }
-                unset($db_controllers[$device_id]);
-            } else {
-                $results['new'][] = $discovered;
-            }
+        if (FSBHOA_DEBUG_MODE) {
+            error_log("CONTROLLER ACTIONS: Executing: " . fsbhoa_uhppote_cli_command($set_address_args));
         }
 
-        $results['missing'] = array_values($db_controllers);
-        foreach ($results['missing'] as $missing_controller) {
-            $wpdb->update($table_name, ['ip_address' => ''], ['uhppoted_device_id' => $missing_controller['uhppoted_device_id']]);
-        }
-
-        set_transient('fsbhoa_discovery_results', $results, MINUTE_IN_SECONDS * 5);
-
-        $results_page_url = add_query_arg('discovery-results', 'true', wp_get_referer());
-        wp_safe_redirect($results_page_url);
-        exit;
-    }
-
-    /**
-     * Handles adding the new controllers selected from the discovery results page.
-     */
-    public function handle_add_discovered_action() {
-        check_admin_referer('fsbhoa_add_discovered_nonce', '_wpnonce');
-
-        if (empty($_POST['new_controllers'])) {
-            wp_safe_redirect(wp_get_referer());
-            exit;
-        }
-
-        global $wpdb;
-        $table_name = 'ac_controllers';
-
-        foreach ($_POST['new_controllers'] as $device_id => $details) {
-            // Check if the 'add' checkbox was checked and a name was provided
-            if (isset($details['add']) && !empty($details['friendly_name'])) {
-                $wpdb->insert($table_name, [
-                    'uhppoted_device_id'   => absint($device_id),
-                    'ip_address'           => sanitize_text_field($details['ip_address']),
-                    'door_count'           => 4,
-                    'friendly_name'        => sanitize_text_field($details['friendly_name']),
-                ]);
-            }
-        }
-
-        // Get the URL of the page that submitted the form
-        $redirect_url = wp_get_referer();
-        if ( ! $redirect_url ) {
-            // As a fallback, build the URL to the main hardware page
-            $redirect_url = add_query_arg('view', 'controllers', get_permalink( get_page_by_path('hardware') ));
-        }
-
-        // Clean up the URL from the discovery-results parameter
-        $list_page_url = remove_query_arg( 'discovery-results', $redirect_url );
-
-        self::regenerate_config_file();
-        fsbhoa_log_pending_change('controller', $controller_id);
-
-        // Add a success message to the final URL
-        $final_url = add_query_arg('message', 'controller_added', $list_page_url);
-
-        wp_safe_redirect($final_url);
-        exit;
+        fsbhoa_uhppote_cli_exec($device_id, $set_address_args);
     }
 
     /**
