@@ -42,6 +42,26 @@ class Fsbhoa_Permission_Compiler {
     public $card_permissions = [];    // [rfid] => [device_id] => "1:14, 2:15..."
 
     /**
+     * The badges that belong on the controllers. load-acl deletes every card not in its list,
+     * so a badge left out here is removed from the controllers.
+     * - The cardholder must be active (current). Archived and purged cardholders are left out
+     *   whatever their badge status.
+     * - The badge must be active or disabled. A disabled badge is sent with no access.
+     */
+    public static function get_badges_to_sync() {
+        global $wpdb;
+        return $wpdb->get_results("
+            SELECT ch.id, cred.credential_value AS rfid_id, cred.status AS card_status,
+                   cred.issue_date AS card_issue_date, cred.expiration_date AS card_expiry_date
+            FROM ac_cardholders ch
+            INNER JOIN ac_credentials cred ON ch.id = cred.cardholder_id
+            WHERE cred.credential_type = 'MIFARE_BADGE'
+            AND cred.status IN ('active', 'disabled')
+            AND ch.cardholder_status = 'active'
+        ");
+    }
+
+    /**
      * MAIN ENTRY POINT
      * @param bool $force_rebuild If true, ignores persistent map (Nightly Sync behavior)
      */
@@ -153,13 +173,7 @@ class Fsbhoa_Permission_Compiler {
         }
 
         // Cards & Memberships
-        $this->raw_data['cards'] = $wpdb->get_results("
-            SELECT ch.id, cred.credential_value AS rfid_id, cred.status AS card_status, cred.issue_date AS card_issue_date, cred.expiration_date AS card_expiry_date
-            FROM ac_cardholders ch
-            INNER JOIN ac_credentials cred ON ch.id = cred.cardholder_id
-            WHERE cred.credential_type = 'MIFARE_BADGE'
-            AND cred.status IN ('active', 'disabled')
-        ");
+        $this->raw_data['cards'] = self::get_badges_to_sync();
         
         // Memberships in disabled groups are ignored, so they don't create extra signatures
         $memberships = $wpdb->get_results("

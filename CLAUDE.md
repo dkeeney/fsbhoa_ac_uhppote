@@ -16,6 +16,9 @@ This plugin supports UHPPOTE professional access controllers. The models come in
 ## Cardholders and permissions
 
 - Every cardholder with a photo ID RFID card is sent to all controllers.
+- **Cardholder status** (`ac_cardholders.cardholder_status`) says only whether someone is current: `active`, `archived` or `purged`. Vendors are never archived; they go straight to `purged`. Whether someone has a badge comes from `ac_credentials` (no badge means no `MIFARE_BADGE` row).
+- **A disabled badge** means no amenity access: it is sent to the controllers with `N` on every door. The cardholder stays `active`, so their DoorKing credentials keep working.
+- **Which badges are sent** (`Fsbhoa_Permission_Compiler::get_badges_to_sync()`, used by every sync and the audit): the cardholder must be `active`, and the badge `active` or `disabled`. Archived and purged cardholders are left out whatever their badge status. `load-acl` deletes any card not in its list, so a badge left out is removed from the controllers.
 - A cardholder's access comes from their group. Every cardholder belongs to at least one group.
 - Each group sets the time spans when its members can use each gate.
 - A permission can name a gate in one of three ways: all gates, all gates on one controller, or one gate by name.

@@ -13,6 +13,26 @@ class Fsbhoa_Uhppote_Credentials {
         // 3. Dual-Write to ac_credentials when Core successfully saves
         add_action('fsbhoa_core_cardholder_updated', [$this, 'sync_to_credentials_table'], 10, 3);
         add_action('fsbhoa_core_cardholder_created', [$this, 'sync_to_credentials_table'], 10, 2);
+
+        // 4. "Card Status" column on the cardholder list
+        add_filter('fsbhoa_cardholder_list_card_status', [$this, 'list_card_status'], 10, 2);
+    }
+
+    private $badge_statuses = null; // [cardholder_id] => badge status, loaded once per page
+
+    /**
+     * The cardholder's badge status for the list: active, disabled, or inactive when they have no badge.
+     */
+    public function list_card_status($status, $cardholder) {
+        global $wpdb;
+        if ($this->badge_statuses === null) {
+            $this->badge_statuses = [];
+            $rows = $wpdb->get_results("SELECT cardholder_id, status FROM ac_credentials WHERE credential_type = 'MIFARE_BADGE'");
+            foreach ($rows as $row) {
+                $this->badge_statuses[(int) $row->cardholder_id] = $row->status;
+            }
+        }
+        return $this->badge_statuses[(int) ($cardholder['id'] ?? 0)] ?? 'inactive';
     }
 
     public function render_rfid_fields($form_data, $is_edit_mode) {
@@ -76,16 +96,8 @@ class Fsbhoa_Uhppote_Credentials {
             }
         }
 
-        if (!empty($results['errors'])) { return $results; }
-
-        // Data Processing: We specifically DO NOT inject rfid_id, card_issue_date, or card_expiry_date into $results['data']
-        // We only tell the Core what the overall cardholder_status should be based on the UI toggle.
-        if (empty($submitted_rfid)) {
-            $results['data']['cardholder_status'] = 'inactive';
-        } else {
-            $results['data']['cardholder_status'] = ($submitted_status === 'active') ? 'active' : 'disabled';
-        }
-
+        // No data goes back to Core: the badge is saved to ac_credentials by sync_to_credentials_table().
+        // The badge never changes cardholder_status, which only says whether someone is current.
         return $results;
     }
 
@@ -94,7 +106,9 @@ class Fsbhoa_Uhppote_Credentials {
 
         // Core has finished. Now read the hardware-specific data straight from the form submission.
         $submitted_rfid = isset($_POST['rfid_id']) ? sanitize_text_field(wp_unslash(trim($_POST['rfid_id']))) : '';
-        $submitted_status = isset($_POST['submitted_card_status']) ? sanitize_text_field(wp_unslash($_POST['submitted_card_status'])) : 'inactive';
+        // A badge is either active or disabled (disabled: no amenity access; DoorKing credentials still work).
+        // No badge means no ac_credentials row, not an 'inactive' one.
+        $submitted_status = (isset($_POST['submitted_card_status']) && $_POST['submitted_card_status'] === 'disabled') ? 'disabled' : 'active';
         $submitted_issue_date = isset($_POST['submitted_card_issue_date']) ? sanitize_text_field(wp_unslash($_POST['submitted_card_issue_date'])) : null;
         $submitted_expiry_date = isset($_POST['card_expiry_date']) ? sanitize_text_field(wp_unslash($_POST['card_expiry_date'])) : '';
         $resident_type = isset($_POST['resident_type']) ? sanitize_text_field(wp_unslash($_POST['resident_type'])) : '';

@@ -29,13 +29,7 @@ function fsbhoa_perform_delta_sync() {
     $active_schedule_id = fsbhoa_get_active_schedule_id();
     $permission_data = fsbhoa_get_all_permission_data($active_schedule_id);
 
-    $cardholders_to_sync = $wpdb->get_results("
-        SELECT ch.*, cred.credential_value AS rfid_id, cred.status AS card_status, cred.issue_date AS card_issue_date, cred.expiration_date AS card_expiry_date
-        FROM ac_cardholders ch
-        INNER JOIN ac_credentials cred ON ch.id = cred.cardholder_id
-        WHERE cred.credential_type = 'MIFARE_BADGE'
-        AND cred.status IN ('active', 'disabled')
-    ");
+    $cardholders_to_sync = Fsbhoa_Permission_Compiler::get_badges_to_sync();
 
 
     // Get the controllers
@@ -91,13 +85,7 @@ function fsbhoa_run_rebuild_pipeline( $wipe_memory, $caption ) {
     $active_schedule_id = fsbhoa_get_active_schedule_id();
     error_log($caption . ": Determined active schedule ID is: " . $active_schedule_id);
     $permission_data = fsbhoa_get_all_permission_data($active_schedule_id);
-    $cardholders_to_sync = $wpdb->get_results("
-        SELECT ch.*, cred.credential_value AS rfid_id, cred.status AS card_status, cred.issue_date AS card_issue_date, cred.expiration_date AS card_expiry_date
-        FROM ac_cardholders ch
-        INNER JOIN ac_credentials cred ON ch.id = cred.cardholder_id
-        WHERE cred.credential_type = 'MIFARE_BADGE'
-        AND cred.status IN ('active', 'disabled')
-    ");
+    $cardholders_to_sync = Fsbhoa_Permission_Compiler::get_badges_to_sync();
     $controllers = $wpdb->get_results("SELECT * FROM ac_controllers WHERE type = 'UHPPOTE'");
 
     fsbhoa_execute_sync_logic(

@@ -56,13 +56,7 @@ class Fsbhoa_Uhppote_Diagnostics {
             wp_send_json_error( 'No UHPPOTR controllers found.' );
         }
 
-        $db_cards = $wpdb->get_results("
-            SELECT ch.id AS cardholder_id, cred.credential_value AS rfid_id, cred.status AS card_status
-            FROM ac_cardholders ch
-            INNER JOIN ac_credentials cred ON ch.id = cred.cardholder_id
-            WHERE cred.credential_type = 'MIFARE_BADGE'
-            AND cred.status IN ('active', 'disabled')
-        ");
+        $db_cards = Fsbhoa_Permission_Compiler::get_badges_to_sync();
 
         $expected_cards = array();
         foreach ( $db_cards as $c ) {
