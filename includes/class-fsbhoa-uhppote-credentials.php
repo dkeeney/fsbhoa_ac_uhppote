@@ -21,15 +21,20 @@ class Fsbhoa_Uhppote_Credentials {
     private $badge_statuses = null; // [cardholder_id] => badge status, loaded once per page
 
     /**
-     * The cardholder's badge status for the list: active, disabled, or inactive when they have no badge.
+     * The cardholder's badge status for the list: active, disabled, expired (an active badge after its
+     * expiry date), or inactive when they have no badge.
      */
     public function list_card_status($status, $cardholder) {
         global $wpdb;
         if ($this->badge_statuses === null) {
             $this->badge_statuses = [];
-            $rows = $wpdb->get_results("SELECT cardholder_id, status FROM ac_credentials WHERE credential_type = 'MIFARE_BADGE'");
+            $today = current_time('Y-m-d');
+            $rows = $wpdb->get_results("SELECT cardholder_id, status, expiration_date FROM ac_credentials WHERE credential_type = 'MIFARE_BADGE'");
             foreach ($rows as $row) {
-                $this->badge_statuses[(int) $row->cardholder_id] = $row->status;
+                $expiry = substr((string) $row->expiration_date, 0, 10);
+                // Valid through the expiry date, like the controller's "To" date
+                $expired = ($expiry !== '' && $expiry !== '0000-00-00' && $expiry < $today);
+                $this->badge_statuses[(int) $row->cardholder_id] = ($row->status === 'active' && $expired) ? 'expired' : $row->status;
             }
         }
         return $this->badge_statuses[(int) ($cardholder['id'] ?? 0)] ?? 'inactive';
