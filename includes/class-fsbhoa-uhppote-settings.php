@@ -40,7 +40,7 @@ class Fsbhoa_Uhppote_Settings {
                 'label'   => 'Enable Scheduled Sync (Cron)',
                 'type'    => 'checkbox',
                 'default' => '',
-                'desc'    => 'Allow nightly cron to run hardware sync and claim controller listener. Leave unchecked on testbed.'
+                'desc'    => 'Allow the nightly cron to run the hardware sync, and the Event Service to claim controller listeners (restart the Event Service after changing this). Leave unchecked on testbed.'
             ],
         ];
 
@@ -132,6 +132,8 @@ class Fsbhoa_Uhppote_Settings {
             'debug'             => (get_option('fsbhoa_ac_debug_mode', 'on') === 'on'),
             'enableTestStub'    => (get_option('fsbhoa_ac_test_stub', 'on') === 'on'),
             'apiKey'            => get_option('fsbhoa_ac_verify_api_key', ''), // Access Verification API Key (core General settings)
+            // Same setting as the nightly sync: only then may this server's event service claim controller listeners
+            'claimListeners'    => (get_option('fsbhoa_ac_enable_scheduled_sync', '') === 'on'),
             'monitorServiceURL' => sprintf('%s://%s:%d', $protocol, $wp_host, absint($monitor_port)),
             'pool_alarm'        => [
                 'enabled'       => (get_option('fsbhoa_pool_alarm_enabled', '0') === '1'),

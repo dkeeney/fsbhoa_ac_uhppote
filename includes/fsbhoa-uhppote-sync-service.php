@@ -57,13 +57,11 @@ function fsbhoa_perform_delta_sync() {
  */
 function fsbhoa_perform_nightly_rebuild_sync() {
 
-    $cron_enabled = get_option('fsbhoa_ac_enable_scheduled_sync', '0');
-
-    if ( ! $cron_enabled || $cron_enabled === '0' ) {
+    // The settings page saves 'on' when ticked and 'off' when not, so only 'on' enables it
+    // ('off' is a non-empty string, which used to count as enabled).
+    if ( get_option('fsbhoa_ac_enable_scheduled_sync', '') !== 'on' ) {
         // Log and exit gracefully without touching the controller
-        if ( defined( 'WP_CLI' ) && WP_CLI ) {
-            error_log( 'Scheduled sync is disabled in settings. Skipping controller listener update.' );
-        }
+        error_log( 'NIGHTLY REBUILD: Scheduled sync is disabled in the Event Service settings. Skipping.' );
         return;
     }
     fsbhoa_run_rebuild_pipeline( false , "NIGHTLY REBUILD"); // $wipe_memory = false

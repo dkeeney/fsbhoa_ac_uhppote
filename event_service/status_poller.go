@@ -34,6 +34,11 @@ func runPoll(u uhppote.IUHPPOTE) {
 	serialsLock.RUnlock()
 
 	for sn, info := range currentControllers {
+		// No IP means no unicast address in the library: a request would be broadcast. Skip it.
+		if controllerAddress(info) == "" {
+			continue
+		}
+
 		// ===  CHECK CONTROLLER-SPECIFIC LOCK WITH TIMEOUT ===
 		lockFile := fmt.Sprintf("/tmp/fsbhoa_sync_active_%d.lock", sn)
 

@@ -19,6 +19,7 @@ type Config struct {
 	MonitorServiceURL string `json:"monitorServiceURL"`
 	EnableTestStub    bool   `json:"enableTestStub"` // /test_event is refused unless this is on
 	APIKey            string `json:"apiKey"`         // Access Verification API Key: sent to WordPress, required on /test_event
+	ClaimListeners    bool   `json:"claimListeners"` // Set/clear controller listeners only when on ("Enable Scheduled Sync"; off on the testbed)
 }
 
 // DoorConfig matches a single door object within the new config file.
