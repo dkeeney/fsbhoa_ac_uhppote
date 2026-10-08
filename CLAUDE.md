@@ -133,5 +133,7 @@ The code itself only sends `set-address` to a controller that already has an add
 
 - **Flash wear.** Writes to controller NVRAM wear the flash. Write only what has changed, and wipe only on recovery or when forced.
 - **Memory corruption.** A controller's card memory can become corrupted. The fix is to wipe and reload (see "Loading cards onto controllers").
+- **Pace requests to a controller.** Back-to-back `uhppote-cli` requests can get wrong replies (seen: a profile read as missing, and a wrong card count that made `load-acl` scan card slots without end). Pause 100–200 ms after each request, as the sync does.
+- **Read before writing** where the controller allows it: the sync reads back time profiles and door delays and writes only differences. Task lists can't be read back; the sync keeps a fingerprint of the last list sent (option `fsbhoa_task_list_hashes`) and re-sends only when it changes, plus on every nightly sync and Force Full Rebuild.
 - **UDP timeouts and dropped packets.** Controller replies can be lost or garbled. The `load-acl` error check looks for `invalid BCD` and `invalid MsgType`.
 - **Door numbering.** Door numbers (`door_number_on_controller`) must match the physical ports on the controller.

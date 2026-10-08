@@ -382,6 +382,8 @@ class Fsbhoa_Controller_Actions {
 
         // Execute the command
         fsbhoa_uhppote_cli_exec($serial_number, sprintf('restore-default-parameters %s', escapeshellarg($serial_number)));
+        // The reset may have cleared its task list, which can't be read back: make the next sync send it
+        fsbhoa_forget_task_list_hash($serial_number);
 
         // Activate the sync banner by logging a pending change
         fsbhoa_log_pending_change('controller', $controller_id);

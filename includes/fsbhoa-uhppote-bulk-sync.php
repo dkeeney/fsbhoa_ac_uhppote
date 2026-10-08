@@ -6,6 +6,7 @@ if ( ! defined( 'WPINC' ) ) { die; }
  * to UHPPOTE controllers via TSV files and temporary configurations.
  */
 class Fsbhoa_Uhppote_Bulk_Sync {
+    const LOAD_ACL_TIMEOUT = 300; // seconds; a full reload of ~800 cards takes far less
 
     /**
      * Executes the bulk load-acl process for a single controller.
@@ -21,7 +22,7 @@ class Fsbhoa_Uhppote_Bulk_Sync {
 
         // 1. Fetch doors for this specific controller to build headers
         $doors = $wpdb->get_results($wpdb->prepare("
-            SELECT door_number_on_controller, friendly_name 
+            SELECT door_number_on_controller
             FROM ac_doors 
             WHERE controller_record_id = %d 
             ORDER BY door_number_on_controller ASC
@@ -65,8 +66,9 @@ class Fsbhoa_Uhppote_Bulk_Sync {
         $door_headers = [];
 
         foreach ($doors as $door) {
-            // Replace spaces with underscores for perfect TSV parsing
-            $safe_name = str_replace(' ', '_', trim($door->friendly_name));
+            // Generated names (door1..door4): load-acl matches TSV columns to door numbers through
+            // this config, and friendly names can repeat or contain characters that break it.
+            $safe_name = 'door' . (int) $door->door_number_on_controller;
             $door_headers[] = $safe_name;
 
             // Format 1: Standard Device mapping
@@ -77,7 +79,7 @@ class Fsbhoa_Uhppote_Bulk_Sync {
 
         $conf_content .= "\n[REST]\n";
         foreach ($doors as $door) {
-            $safe_name = str_replace(' ', '_', trim($door->friendly_name));
+            $safe_name = 'door' . (int) $door->door_number_on_controller;
 
             // Format 3: REST Prefix mapping
             $conf_content .= "REST.door.{$safe_name} = {$device_id}:{$door->door_number_on_controller}\n";
@@ -127,8 +129,11 @@ class Fsbhoa_Uhppote_Bulk_Sync {
 
         // 4. Execute the Bulk Upload
         // We pass the explicit config file and strict mode
+        // Time limit: if the controller gives a wrong card count (seen when requests come too fast),
+        // load-acl scans card slots without end, which would hang the sync and leave its lock behind.
         $bulk_command = sprintf(
-            'uhppote-cli --config %s load-acl %s 2>&1', 
+            'timeout %d uhppote-cli --config %s load-acl %s 2>&1',
+            self::LOAD_ACL_TIMEOUT,
             escapeshellarg($conf_path), 
             escapeshellarg($tsv_path)
         );
@@ -144,7 +149,21 @@ class Fsbhoa_Uhppote_Bulk_Sync {
             // The Intelligent Self-Healing Retry Loop (Up to 3 attempts)
             for ($attempt = 1; $attempt <= 3; $attempt++) {
                 error_log("SYNC SERVICE: Executing bulk load-acl (Attempt {$attempt}/3) for {$device_id}...");
-                $output = shell_exec($bulk_command);
+                $output_lines = [];
+                exec($bulk_command, $output_lines, $exit_code);
+                $output = implode("\n", $output_lines);
+
+                // Timed out: not a sign of corrupt memory, so retry without wiping
+                if ($exit_code === 124) {
+                    error_log("SYNC WARNING: Bulk ACL attempt {$attempt}/3 for {$device_id} timed out after " . self::LOAD_ACL_TIMEOUT . "s.");
+                    if ($attempt < 3) {
+                        sleep(2);
+                        continue;
+                    }
+                    error_log("SYNC FATAL (BULK ACL): Timed out 3 times for {$device_id}.");
+                    $success = false;
+                    break;
+                }
 
                 // Check for errors, hung responses, dropped packets, or data corruption
                 $has_error = empty($output)

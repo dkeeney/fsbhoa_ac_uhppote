@@ -94,7 +94,8 @@ function fsbhoa_run_rebuild_pipeline( $wipe_memory, $caption ) {
         $cardholders_to_sync, 
         $is_dry_run, 
         $wipe_memory, 
-        $active_schedule_id);
+        $active_schedule_id,
+        true); // nightly and forced rebuilds always re-send the task lists (they can't be read back)
 }
 
 
@@ -106,8 +107,9 @@ function fsbhoa_run_rebuild_pipeline( $wipe_memory, $caption ) {
  *    $cardholders_to_delete - list of cardholders to delete from controllers (from pending changes table)
  *    $wipe_memory  - means tell controller to wipe before sync and also wipe persistent maps.
  *    $active_schedule_id  - which schedule to use.
+ *    $always_send_tasks   - re-send the task lists even if unchanged (rebuilds; they can't be read back).
  */
-function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_to_sync, $is_dry_run, $wipe_memory, $active_schedule_id) {
+function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_to_sync, $is_dry_run, $wipe_memory, $active_schedule_id, $always_send_tasks = false) {
     global $wpdb;
     $retry_attempts = 3;
     $retry_wait = 250000;
@@ -190,14 +192,25 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
             }
 
             // --- STEP 4: UPLOAD TIME PROFILES ---
-            // We always push profiles. If the hours changed, this updates the "stable" ID.
+            // Each profile is read back first and written only if it differs (flash wear).
+            // If the hours changed, this updates the "stable" ID.
             $profiles_to_write = $global_profiles[$device_id] ?? [];
+            $profiles_unchanged = 0;
             if (!empty($profiles_to_write)) {
                 foreach ($profiles_to_write as $profile_id => $data) {
                     $parts = explode('|', $data['content']);
                     $weekdays = $parts[0];
                     $spans_string = "'" . $parts[1] . "'";
                     $linked_profile_id = intval($data['link']);
+
+                    if (!$wipe_memory) {
+                        $is_current = fsbhoa_uhppote_profile_is_current($device_id, $profile_id, '2020-01-01:2099-12-31', $weekdays, $parts[1], $linked_profile_id);
+                        usleep(200000); // pace requests: back-to-back requests get wrong replies
+                        if ($is_current) {
+                            $profiles_unchanged++;
+                            continue;
+                        }
+                    }
     
                     $args = sprintf("set-time-profile %s %d %s %s %s %d",
                         $device_id, $profile_id, '2020-01-01:2099-12-31', $weekdays, $spans_string, $linked_profile_id
@@ -223,6 +236,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                     }
                     if (!$is_dry_run) usleep(200000); 
                 }
+                error_log("SYNC SERVICE: Time profiles for $friendly_name: $profiles_unchanged unchanged, " . (count($profiles_to_write) - $profiles_unchanged) . " written.");
             }
             // --- STEP 5: SYNC DOOR DELAYS (NIGHTLY REBUILD ONLY) ---
             error_log("SYNC SERVICE: Setting door unlock durations for $friendly_name...");
@@ -240,6 +254,13 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                     $door_num = $door->door_number_on_controller;
                     // Ensure delay is valid (default to 3 if missing or out of bounds)
                     $delay = (isset($door->door_delay) && $door->door_delay > 0 && $door->door_delay <= 60) ? intval($door->door_delay) : 3;
+
+                    // Read back first; write only if different (flash wear)
+                    $current = preg_split('/\s+/', trim(fsbhoa_uhppote_cli_exec($device_id, sprintf('get-door-delay %s %d', $device_id, $door_num))));
+                    usleep(100000); // pace requests: back-to-back requests get wrong replies
+                    if (count($current) === 3 && (int) $current[1] === (int) $door_num && (int) $current[2] === $delay) {
+                        continue;
+                    }
 
                     $delay_args = sprintf(
                         "set-door-delay %s %d %d",
@@ -278,7 +299,9 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
 
 
             // --- STEP 7: SYNC TASKS ---
-            fsbhoa_execute_task_sync($device_id, $controller->controller_record_id, $active_schedule_id, $is_dry_run, $retry_attempts);
+            if (!fsbhoa_execute_task_sync($device_id, $controller->controller_record_id, $active_schedule_id, $is_dry_run, $retry_attempts, $always_send_tasks)) {
+                $global_sync_failed = true;
+            }
 
 
         } finally {
@@ -319,9 +342,49 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
 
 
 /**
- * Helper to handle Task Syncing (Clear and Add).
+ * Whether the controller already holds this time profile, so it needn't be written again.
+ * get-time-profile prints e.g. "425043852  3 2020-01-01:2099-12-31 Mon,Tue,Wed,Thurs,Fri,Sat,Sun 05:00-21:59 0"
+ * (or "... NO ACTIVE TIME PROFILE"). Anything unexpected counts as different, so it gets written.
  */
-function fsbhoa_execute_task_sync($device_id, $controller_id, $active_schedule_id, $is_dry_run, $retry_attempts) {
+function fsbhoa_uhppote_profile_is_current($device_id, $profile_id, $dates, $weekdays, $spans, $link) {
+    $f = preg_split('/\s+/', trim(fsbhoa_uhppote_cli_exec($device_id, sprintf('get-time-profile %s %d', $device_id, $profile_id))));
+    if (count($f) !== 6 || (int) $f[1] !== (int) $profile_id) {
+        return false;
+    }
+    // The controller prints "Thurs"; compare days by their first three letters, in any order
+    $days = function ($list) {
+        $d = array_map(function ($x) { return strtolower(substr(trim($x), 0, 3)); }, explode(',', $list));
+        sort($d);
+        return $d;
+    };
+    $span_list = function ($list) {
+        $d = array_values(array_filter(array_map('trim', explode(',', $list))));
+        sort($d);
+        return $d;
+    };
+    return $f[2] === $dates
+        && $days($f[3]) === $days($weekdays)
+        && $span_list($f[4]) === $span_list($spans)
+        && (int) $f[5] === (int) $link;
+}
+
+/**
+ * Task lists can't be read back from a controller, so the last list sent to each controller is
+ * remembered as a fingerprint (option fsbhoa_task_list_hashes, keyed by serial). Forget it when a
+ * controller may have lost its tasks (e.g. factory reset), so the next sync sends them.
+ */
+function fsbhoa_forget_task_list_hash($device_id) {
+    $hashes = get_option('fsbhoa_task_list_hashes', []);
+    unset($hashes[(string) $device_id]);
+    update_option('fsbhoa_task_list_hashes', $hashes, false);
+}
+
+/**
+ * Helper to handle Task Syncing (Clear and Add).
+ * Skipped when the list is the same as the one last sent to this controller, unless $always_send.
+ * @return bool false if a command failed
+ */
+function fsbhoa_execute_task_sync($device_id, $controller_id, $active_schedule_id, $is_dry_run, $retry_attempts, $always_send = false) {
     global $wpdb;
     $retry_wait = 250000;
 
@@ -334,27 +397,11 @@ function fsbhoa_execute_task_sync($device_id, $controller_id, $active_schedule_i
     ));
     error_log("TASK SYNC DEBUG: Found " . count($tasks) . " tasks for Schedule ID: $active_schedule_id");
 
-    $clear_task_list_args = sprintf('clear-task-list %s', $device_id);
-    $clear_task_list_command = fsbhoa_uhppote_cli_command($clear_task_list_args);
-    
-    // DEBUG: Wiping Tasks
-    error_log("SYNC SERVICE: Refreshing tasks on controller $device_id");
-
-    if (!$is_dry_run) {
-        $output_clear_tasks = fsbhoa_uhppote_cli_exec($device_id, $clear_task_list_args);
-        if (strpos($output_clear_tasks, 'false') !== false || strpos($output_clear_tasks, 'ERROR') !== false) {
-            error_log("SYNC WARNING (CLEAR TASKS) for $device_id: $output_clear_tasks");
-        } else {
-            error_log("SYNC Clearing Tasks: " . $clear_task_list_command);
-        }
-    } else {
-        error_log("DRY RUN: Would execute: " . $clear_task_list_command);
-    }
-
+    // 1. Build the add-task commands for this controller
+    $add_task_list = [];
     foreach ($tasks as $task) {
         // LOOSE CHECK: Handle null, string '0', or matching integer/string ID
         $task_cid = !empty($task->controller_id) ? (int)$task->controller_id : null;
-        //error_log("cid = " . (($task_cid === null) ? "null" : $task_cid));
 
         if ($task_cid === null || $task_cid == $controller_id) {
             $valid_from = ($task->is_default) ? '2025-01-01' : $task->start_date;
@@ -372,24 +419,61 @@ function fsbhoa_execute_task_sync($device_id, $controller_id, $active_schedule_i
             }
 
             foreach ($doors_to_set as $door) {
-                $add_task_args = sprintf('add-task %s %s %d %s:%s %s %s 0',
+                $add_task_list[] = sprintf('add-task %s %s %d %s:%s %s %s 0',
                     $device_id, $task_description, $door, $valid_from, $valid_to, $weekdays, substr($task->start_time, 0, 5));
-                $add_task_command = fsbhoa_uhppote_cli_command($add_task_args);
-                if ($is_dry_run) {
-                    error_log("DRY RUN (TASK): " . $add_task_command);
-                } else {
-                    for ($i = 0; $i < $retry_attempts; $i++) {
-                        $output = fsbhoa_uhppote_cli_exec($device_id, $add_task_args);
-                        if (strpos($output, 'false') === false && strpos($output, 'ERROR') === false) {
-                            error_log("SYNC Updated Task: " . $add_task_command);
-                            break;
-                        }
-                        usleep($retry_wait);
-                    }
-                }
-                usleep(100000); // 0.1 Seconds
             }
         }
+    }
+
+    // 2. Skip if the controller already has exactly this list (flash wear)
+    $hash = md5(implode("\n", $add_task_list));
+    $hashes = get_option('fsbhoa_task_list_hashes', []);
+    if (!$always_send && ($hashes[(string) $device_id] ?? '') === $hash) {
+        error_log("SYNC SERVICE: Task list for controller $device_id unchanged; not re-sent.");
+        return true;
+    }
+
+    // 3. Clear, add, refresh
+    $ok = true;
+    $clear_task_list_args = sprintf('clear-task-list %s', $device_id);
+    $clear_task_list_command = fsbhoa_uhppote_cli_command($clear_task_list_args);
+    
+    // DEBUG: Wiping Tasks
+    error_log("SYNC SERVICE: Refreshing tasks on controller $device_id");
+
+    if (!$is_dry_run) {
+        $output_clear_tasks = fsbhoa_uhppote_cli_exec($device_id, $clear_task_list_args);
+        if (strpos($output_clear_tasks, 'false') !== false || strpos($output_clear_tasks, 'ERROR') !== false) {
+            error_log("SYNC WARNING (CLEAR TASKS) for $device_id: $output_clear_tasks");
+            $ok = false;
+        } else {
+            error_log("SYNC Clearing Tasks: " . $clear_task_list_command);
+        }
+    } else {
+        error_log("DRY RUN: Would execute: " . $clear_task_list_command);
+    }
+
+    foreach ($add_task_list as $add_task_args) {
+        $add_task_command = fsbhoa_uhppote_cli_command($add_task_args);
+        if ($is_dry_run) {
+            error_log("DRY RUN (TASK): " . $add_task_command);
+        } else {
+            $added = false;
+            for ($i = 0; $i < $retry_attempts; $i++) {
+                $output = fsbhoa_uhppote_cli_exec($device_id, $add_task_args);
+                if (strpos($output, 'false') === false && strpos($output, 'ERROR') === false) {
+                    error_log("SYNC Updated Task: " . $add_task_command);
+                    $added = true;
+                    break;
+                }
+                usleep($retry_wait);
+            }
+            if (!$added) {
+                error_log("SYNC FAILED (TASK) for $device_id: $add_task_command: $output");
+                $ok = false;
+            }
+        }
+        usleep(100000); // 0.1 Seconds
     }
     
     $refresh_task_list_args = sprintf('refresh-task-list %s', $device_id);
@@ -398,12 +482,22 @@ function fsbhoa_execute_task_sync($device_id, $controller_id, $active_schedule_i
         $output_refresh_tasks = fsbhoa_uhppote_cli_exec($device_id, $refresh_task_list_args);
         if (strpos($output_refresh_tasks, 'false') !== false || strpos($output_refresh_tasks, 'ERROR') !== false) {
              error_log("SYNC FAILED (REFRESH TASKS) for $device_id: $output_refresh_tasks");
+             $ok = false;
         } else {
              error_log("SYNC Refresh Tasks: " . $refresh_task_list_command);
         }
     } else {
         error_log("DRY RUN: Would execute: " . $refresh_task_list_command);
     }
+
+    // 4. Remember what the controller now has (only if every command worked, so a failure is retried)
+    if ($ok && !$is_dry_run) {
+        $hashes[(string) $device_id] = $hash;
+        update_option('fsbhoa_task_list_hashes', $hashes, false);
+    } elseif (!$ok) {
+        fsbhoa_forget_task_list_hash($device_id);
+    }
+    return $ok;
 }
 
 /**
