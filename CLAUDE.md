@@ -67,6 +67,7 @@ It works in two steps:
   - **If a load adds or deletes cards in a table that already had cards** (`unchanged` > 0 and `added` or `deleted` > 0), the code wipes the controller and loads again, so the table is rebuilt in order. Changed permissions on existing cards (`updated`) don't need this.
 - **If `load-acl` reports an error, times out, or doesn't print its summary line** (`unchanged: updated: added: deleted: failed: errors:`), the code runs `uhppote-cli delete-all` to wipe every card on the controller, waits 4 seconds for the flash erase to finish, and runs `load-acl` again. It tries up to 3 times. The wipe clears any corruption in the controller's memory and any cards an interrupted load appended out of order.
 - `delete-all` runs only between attempts, never before the first one, to protect the flash.
+- **To check the controllers**, use the Hardware Controller Audit on the Diagnostics page (`class-fsbhoa-uhppote-diagnostics.php`). It compares each controller's cards (dates and per-door setting) and time profiles with a dry run of the compiler, using `Fsbhoa_Uhppote_Bulk_Sync::build_card_row()` so it expects exactly what the sync sends. It can also look up every card by number on one chosen controller (about 2 minutes), which is the only way to find cards stored out of order: `get-cards` still lists them.
 
 ## Syncs
 

@@ -115,21 +115,8 @@ class Fsbhoa_Uhppote_Bulk_Sync {
             if (empty($rfid)) continue;
 
             $perm_string = $global_card_perms[$rfid][$device_id] ?? '';
-            // A missing or zero date means no limit
-            $issue_date  = substr( trim( (string) $cardholder->card_issue_date ), 0, 10 );
-            $expiry_date = substr( trim( (string) $cardholder->card_expiry_date ), 0, 10 );
-            if ( $issue_date === '' || $issue_date === '0000-00-00' )   { $issue_date  = '2020-01-01'; }
-            if ( $expiry_date === '' || $expiry_date === '0000-00-00' ) { $expiry_date = '2099-12-31'; }
+            $full_row = $this->build_card_row($cardholder, $perm_string, $doors);
 
-            $row_base = [
-                $rfid,
-                $issue_date,
-                $expiry_date
-            ];
-            
-            $door_columns = $this->build_tsv_row($perm_string, $doors);
-            $full_row = array_merge($row_base, $door_columns);
-            
             fputcsv($tsv_handle, $full_row, "\t", '"', '\\');
         }
         fclose($tsv_handle);
@@ -263,6 +250,29 @@ class Fsbhoa_Uhppote_Bulk_Sync {
         // Settle delay for the flash sector erase
         error_log("SYNC RECOVERY: Pausing 4 seconds for controller flash erase to settle...");
         sleep(4);
+    }
+
+    /**
+     * The TSV row sent for one card: card number, from date, to date, then one column per door.
+     * The hardware audit uses it too, to know what each card on a controller should hold.
+     * @param object $cardholder A row from Fsbhoa_Permission_Compiler::get_badges_to_sync()
+     * @param string $perm_string The compiler's permission string for this card and controller
+     * @param array $doors Door objects for the controller, ordered by door_number_on_controller
+     */
+    public function build_card_row($cardholder, $perm_string, $doors) {
+        // A missing or zero date means no limit
+        $issue_date  = substr( trim( (string) $cardholder->card_issue_date ), 0, 10 );
+        $expiry_date = substr( trim( (string) $cardholder->card_expiry_date ), 0, 10 );
+        if ( $issue_date === '' || $issue_date === '0000-00-00' )   { $issue_date  = '2020-01-01'; }
+        if ( $expiry_date === '' || $expiry_date === '0000-00-00' ) { $expiry_date = '2099-12-31'; }
+
+        $row_base = [
+            $cardholder->rfid_id,
+            $issue_date,
+            $expiry_date
+        ];
+
+        return array_merge($row_base, $this->build_tsv_row($perm_string, $doors));
     }
 
     /**
