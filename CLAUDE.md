@@ -62,8 +62,11 @@ It works in two steps:
 `includes/fsbhoa-uhppote-bulk-sync.php` writes the card and profile list to each controller with `uhppote-cli load-acl`, using a TSV file that has one column per door (`N`, `Y`, or a profile number).
 
 - `load-acl` reads the cards already on the controller and writes only the ones that differ. This keeps NVRAM (flash) writes to a minimum, so don't replace it with anything that rewrites every card.
-- **If `load-acl` reports an error**, the code runs `uhppote-cli delete-all` to wipe every card on the controller, waits 4 seconds for the flash erase to finish, and runs `load-acl` again. It tries up to 3 times. The wipe clears any corruption in the controller's memory.
-- `delete-all` runs only before a retry, never before the first attempt, to protect the flash.
+- **The card table must stay sorted.** The controller finds a card with a binary search, but `load-acl` appends new cards to the end of the table. A card out of order is stored (`get-cards` lists it) but can't be found: `get-card` says `NO RECORD` and the swipe is denied. This hit about 60 cards at production's South Gate (fixed on the V1 `v1-production` branch of core, 2026-10-09). So:
+  - TSV rows are written in ascending card-number order.
+  - **If a load adds or deletes cards in a table that already had cards** (`unchanged` > 0 and `added` or `deleted` > 0), the code wipes the controller and loads again, so the table is rebuilt in order. Changed permissions on existing cards (`updated`) don't need this.
+- **If `load-acl` reports an error, times out, or doesn't print its summary line** (`unchanged: updated: added: deleted: failed: errors:`), the code runs `uhppote-cli delete-all` to wipe every card on the controller, waits 4 seconds for the flash erase to finish, and runs `load-acl` again. It tries up to 3 times. The wipe clears any corruption in the controller's memory and any cards an interrupted load appended out of order.
+- `delete-all` runs only between attempts, never before the first one, to protect the flash.
 
 ## Syncs
 
