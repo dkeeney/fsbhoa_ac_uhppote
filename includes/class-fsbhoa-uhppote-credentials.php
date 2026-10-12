@@ -77,18 +77,21 @@ class Fsbhoa_Uhppote_Credentials {
             if (!preg_match('/^[a-zA-Z0-9]{8}$/', $submitted_rfid)) {
                 $results['errors']['rfid_id'] = __('RFID ID must be 8 alphanumeric characters.', 'fsbhoa-ac');
             } else {
-                // Check ac_credentials for duplicates instead of ac_cardholders
+                // A badge number must be unique among active cardholders, whatever its credential status.
+                // Archived/purged holders don't count (core drops a conflicting badge on restore).
                 $is_duplicate = $wpdb->get_var( $wpdb->prepare(
-                   	"SELECT id FROM ac_credentials
-	                 WHERE credential_value = %s
-	                   AND cardholder_id != %d
-	                   AND credential_type = 'MIFARE_BADGE'
-	                 LIMIT 1",
-	                $submitted_rfid,
-	                $cardholder_id
+                    "SELECT cred.id FROM ac_credentials cred
+                     JOIN ac_cardholders c ON c.id = cred.cardholder_id
+                     WHERE cred.credential_value = %s
+                       AND cred.cardholder_id != %d
+                       AND cred.credential_type = 'MIFARE_BADGE'
+                       AND c.cardholder_status = 'active'
+                     LIMIT 1",
+                    $submitted_rfid,
+                    $cardholder_id
                 ) );
                 if ($is_duplicate !== null) {
-                    $results['errors']['rfid_id_duplicate'] = __('This RFID ID is already assigned to another cardholder.', 'fsbhoa-ac');
+                    $results['errors']['rfid_id_duplicate'] = __('This RFID ID is already assigned to another active cardholder.', 'fsbhoa-ac');
                 }
             }
         }
