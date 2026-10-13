@@ -26,6 +26,10 @@ function fsbhoa_uhppote_init() {
         return;
     }
 
+    // Our event service posts pedestrian gate events to core's /monitor/log-event,
+    // so turn on core's pedestrian column on the live monitor.
+    add_filter( 'fsbhoa_monitor_show_pedestrian_column', '__return_true' );
+
     // ONLY load the heavy lifting if we are in the admin dashboard, 
     // running AJAX, or running a background Cron job
     if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
