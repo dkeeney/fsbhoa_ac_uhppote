@@ -99,7 +99,7 @@ class Fsbhoa_Uhppote_Credentials {
         if ($resident_type === 'Contractor' && $submitted_status === 'active') {
             if (empty($submitted_expiry_date)) {
                 $results['errors']['card_expiry_date'] = __('An active Contractor card requires an expiry date.', 'fsbhoa-ac');
-            } elseif (strtotime($submitted_expiry_date) <= time()) {
+            } elseif (substr($submitted_expiry_date, 0, 10) <= current_time('Y-m-d')) {
                 $results['errors']['card_expiry_date'] = __('The expiry date must be in the future.', 'fsbhoa-ac');
             }
         }
