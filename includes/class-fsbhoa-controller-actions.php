@@ -7,8 +7,6 @@ class Fsbhoa_Controller_Actions {
         add_action('admin_post_fsbhoa_add_controller', [ $this, 'handle_form_submission' ]);
         add_action('admin_post_fsbhoa_update_controller', [ $this, 'handle_form_submission' ]);
         add_action('admin_post_fsbhoa_delete_controller', [ $this, 'handle_delete_action' ]);
-        add_action('wp_ajax_fsbhoa_sync_all_controllers', [ $this, 'ajax_handle_sync_all' ]);
-        add_action('wp_ajax_fsbhoa_get_sync_status', [ $this, 'ajax_get_sync_status' ]);
         add_action('wp_ajax_fsbhoa_factory_reset', array($this, 'ajax_factory_reset_controller'));
         add_action('wp_ajax_fsbhoa_trigger_full_wipe_rebuild', [ $this, 'ajax_trigger_full_wipe_rebuild' ]);
     }
@@ -207,75 +205,6 @@ class Fsbhoa_Controller_Actions {
         }
 
         fsbhoa_uhppote_cli_exec($device_id, $set_address_args);
-    }
-
-    /**
-     * AJAX handler to kick off the background sync process.
-     */
-    public function ajax_handle_sync_all() {
-        check_ajax_referer('fsbhoa_sync_nonce', 'nonce');
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error('Permission denied.', 403);
-        }
-
-        // First, check if a sync is already scheduled or running to prevent duplicates.
-        if (wp_next_scheduled('fsbhoa_run_background_sync')) {
-            wp_send_json_success(['message' => 'Sync is already in progress.']);
-            return;
-        }
-
-        // Schedule a single, one-off event to run as soon as possible.
-        // This is the key to creating a reliable background process.
-        wp_schedule_single_event(time(), 'fsbhoa_run_background_sync');
-
-        // Set the initial "in progress" transient so the UI updates immediately.
-        set_transient('fsbhoa_sync_status', ['status' => 'in_progress', 'message' => 'Sync process has been scheduled...'], MINUTE_IN_SECONDS * 5);
-
-        // Tell the browser that the scheduling was successful.
-        wp_send_json_success(['message' => 'Sync process scheduled successfully.']);
-    }
-
-
-
-    /**
-     * AJAX handler to check the status of a sync.
-     */
-    public function ajax_get_sync_status() {
-        check_ajax_referer('fsbhoa_sync_nonce', 'nonce');
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error('Permission denied.', 403);
-        }
-
-        global $wpdb;
-        $count = $wpdb->get_var("SELECT COUNT(*) FROM ac_pending_changes");
-        $transient = get_transient('fsbhoa_sync_status');
-    
-        // If the transient is gone but the count is 0, the sync is complete.
-        if ( $count == 0 ) {
-            wp_send_json_success([
-                'count'   => 0,
-                'status'  => 'complete',
-                'message' => 'Sync complete!',
-            ]);
-            return;
-        }
-
-        // If a transient exists, it means the sync is actively in progress.
-        if ( $transient ) {
-             wp_send_json_success([
-                'count'   => $count, // Send the current count
-                'status'  => $transient['status'],
-                'message' => $transient['message'],
-            ]);
-            return;
-        }
-
-        // Otherwise, there's no transient but the count is > 0, so it's idle/stuck.
-        wp_send_json_success([
-            'count'   => $count,
-            'status'  => 'idle',
-            'message' => '',
-        ]);
     }
 
     /**

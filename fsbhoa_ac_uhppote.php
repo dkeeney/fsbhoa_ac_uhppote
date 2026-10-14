@@ -30,6 +30,9 @@ function fsbhoa_uhppote_init() {
     // so turn on core's pedestrian column on the live monitor.
     add_filter( 'fsbhoa_monitor_show_pedestrian_column', '__return_true' );
 
+    // Report the controllers' pending changes and sync progress on core's banner
+    add_filter( 'fsbhoa_push_targets', 'fsbhoa_uhppote_push_target' );
+
     // ONLY load the heavy lifting if we are in the admin dashboard, 
     // running AJAX, or running a background Cron job
     if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
@@ -73,6 +76,31 @@ function fsbhoa_uhppote_init() {
     if ( class_exists( 'Fsbhoa_Uhppote_Diagnostics' ) ) {
         new Fsbhoa_Uhppote_Diagnostics();
 }
+}
+
+/**
+ * The UHPPOTE controllers' entry on core's push banner (Fsbhoa_Push). The controllers' queue is
+ * ac_pending_changes, which the delta sync clears when every controller succeeded; its
+ * progress is in the fsbhoa_sync_status transient.
+ */
+function fsbhoa_uhppote_push_target( $targets ) {
+    global $wpdb;
+    $count  = (int) $wpdb->get_var( "SELECT COUNT(*) FROM ac_pending_changes" );
+    $status = get_transient( 'fsbhoa_sync_status' );
+    $state  = is_array( $status ) ? ( $status['status'] ?? '' ) : '';
+    $text   = is_array( $status ) ? ( $status['message'] ?? '' ) : '';
+
+    if ( 'in_progress' === $state ) {
+        $entry = array( 'state' => 'in_progress', 'message' => $text );
+    } elseif ( $count > 0 && 'failed' === $state ) {
+        $entry = array( 'state' => 'error', 'message' => $text );
+    } elseif ( $count > 0 ) {
+        $entry = array( 'state' => 'pending', 'message' => sprintf( _n( '%d change waiting.', '%d changes waiting.', $count, 'fsbhoa-ac-uhppote' ), $count ) );
+    } else {
+        $entry = array( 'state' => 'done', 'message' => 'complete' === $state ? $text : '' );
+    }
+    $targets[] = array_merge( array( 'id' => 'uhppote', 'label' => 'UHPPOTE controllers' ), $entry );
+    return $targets;
 }
 
 function fsbhoa_uhppote_missing_core_notice() {

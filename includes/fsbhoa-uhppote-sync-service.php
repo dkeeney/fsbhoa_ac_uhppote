@@ -6,14 +6,15 @@ if (!defined('WPINC')) { die; }
 require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/class-fsbhoa-permission-compiler.php';
 require_once FSBHOA_UHPPOTE_PLUGIN_DIR . 'includes/fsbhoa-uhppote-bulk-sync.php';
 
-add_action('fsbhoa_run_background_sync', 'fsbhoa_perform_delta_sync');
+// "Push Changes Now" on core's banner (Fsbhoa_Push) fires fsbhoa_push_to_controllers
+add_action('fsbhoa_push_to_controllers', 'fsbhoa_perform_delta_sync');
 add_action('fsbhoa_run_nightly_rebuild', 'fsbhoa_perform_nightly_rebuild_sync');
 add_action('fsbhoa_run_full_wipe_rebuild',   'fsbhoa_perform_full_wipe_rebuild');
 add_action('fsbhoa_run_daily_time_sync', 'fsbhoa_perform_daily_time_sync');
 
 /**
  * fsbhoa_perform_delta_sync()
- * Triggered by the manual "Sync Now" button in the GUI.
+ * Triggered by "Push Changes Now" on core's banner (fsbhoa_push_to_controllers).
  */
 function fsbhoa_perform_delta_sync() {
     global $wpdb;
