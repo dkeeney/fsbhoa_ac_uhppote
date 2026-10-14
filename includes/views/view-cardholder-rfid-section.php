@@ -113,7 +113,7 @@ function fsbhoa_render_rfid_section( $form_data, $mode = 'add' ) {
             <div class="form-field" id="fsbhoa_expiry_date_wrapper_contractor" style="<?php if ($form_data['resident_type'] !== 'Contractor') echo 'display:none;'; ?>">
                 <label for="card_expiry_date_contractor_input"><?php esc_html_e( 'Expires (Contractor)', 'fsbhoa-ac' ); ?></label>
                 <input type="date" name="card_expiry_date" id="card_expiry_date_contractor_input" 
-                    value="<?php echo esc_attr((isset($expiry_date) && $expiry_date && $expiry_date !== '0000-00-00') ? $expiry_date : ''); ?>">
+                    value="<?php echo esc_attr((isset($expiry_date) && $expiry_date && $expiry_date !== '0000-00-00' && $expiry_date !== '2099-12-31') ? $expiry_date : ''); ?>">
             </div>
         </div>
         
