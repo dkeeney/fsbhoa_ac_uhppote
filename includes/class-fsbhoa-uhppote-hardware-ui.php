@@ -7,7 +7,6 @@ class Fsbhoa_Uhppote_Hardware_UI {
         add_action('fsbhoa_hardware_management_view_controllers', [$this, 'render_controllers_page']);
         add_action('fsbhoa_hardware_management_view_gates', [$this, 'render_gates_page']);
         add_filter('fsbhoa_hardware_set_door_state', [$this, 'execute_door_command'], 10, 3);
-        add_filter('fsbhoa_hardware_map_event_data', [$this, 'map_lighting_controller'], 10, 2);
         add_filter('fsbhoa_hardware_group_status', [$this, 'calculate_group_status'], 10, 2);
         add_filter('fsbhoa_simulate_hardware_event', [$this, 'simulate_hardware_event']);
         add_filter('fsbhoa_trigger_custom_hardware_event', [$this, 'trigger_custom_hardware_event'], 10, 3);
@@ -25,25 +24,6 @@ class Fsbhoa_Uhppote_Hardware_UI {
             $page = new Fsbhoa_Gate_Admin_Page();
             $page->render_page();
         }
-    }
-
-    public function map_lighting_controller($mapped_data, $raw_params) {
-        global $wpdb;
-
-        // Only intervene if it's the UHPPOTE lighting controller
-        if ( $mapped_data['serial'] === '900001' && !empty($mapped_data['zone']) ) {
-            $db_door = $wpdb->get_row( $wpdb->prepare( "
-                SELECT d.door_number_on_controller
-                FROM ac_doors d
-                JOIN ac_controllers c ON d.controller_record_id = c.controller_record_id
-                WHERE c.uhppoted_device_id = '900001' AND d.friendly_name = %s LIMIT 1
-            ", $mapped_data['zone'] ) );
-
-            if ( $db_door ) {
-                $mapped_data['door'] = absint($db_door->door_number_on_controller);
-            }
-        }
-        return $mapped_data;
     }
 
     public function execute_door_command($handled, $door_id, $state_code) {
