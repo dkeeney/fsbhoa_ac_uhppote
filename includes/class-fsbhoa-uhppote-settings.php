@@ -123,7 +123,18 @@ class Fsbhoa_Uhppote_Settings {
 
     public function write_json_config() {
         // Read global options from the Core
-        $wp_host        = get_option('fsbhoa_ac_wp_host', 'access.fsbhoa.com');
+        $wp_host        = trim((string) get_option('fsbhoa_ac_wp_host', ''));
+
+        // Fail closed: without this server's own host name, the event service would post gate
+        // events to a guessed WordPress, which could be another system's (e.g. a testbed
+        // posting into production). Keep the existing event_service.json rather than guess.
+        if ($wp_host === '') {
+            error_log('FSBHOA Event Service: Not writing ' . $this->config_path . ': the WordPress API Host (fsbhoa_ac_wp_host) is not set in the FSBHOA AC General settings.');
+            // The uhppote-cli config uses only the bind and broadcast addresses
+            fsbhoa_uhppote_write_cli_config();
+            return;
+        }
+
         $wp_port        = get_option('fsbhoa_ac_wp_port', 443);
         $tls_cert_path  = get_option('fsbhoa_ac_tls_cert_path', '/etc/letsencrypt/live/nas.fsbhoa.com/fullchain.pem');
         $tls_key_path   = get_option('fsbhoa_ac_tls_key_path', '/etc/letsencrypt/live/nas.fsbhoa.com/privkey.pem');
