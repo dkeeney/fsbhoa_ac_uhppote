@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/uhppoted/uhppote-core/types"
@@ -39,20 +42,12 @@ func runPoll(u uhppote.IUHPPOTE) {
 			continue
 		}
 
-		// ===  CHECK CONTROLLER-SPECIFIC LOCK WITH TIMEOUT ===
-		lockFile := fmt.Sprintf("/tmp/fsbhoa_sync_active_%d.lock", sn)
-
-		if fileInfo, err := os.Stat(lockFile); err == nil {
-			// The lock exists. Check how old it is.
-			if time.Since(fileInfo.ModTime()) > 5*time.Minute {
-				// Lock is older than 5 minutes (stale/orphaned).
-				// Delete it and continue polling normally.
-				// log.Printf("POLLER: Stale lock found for %d, removing it.", sn)
-				os.Remove(lockFile)
-			} else {
-				// Lock is fresh. A sync is actively happening. Skip polling.
-				continue
-			}
+		// === CONTROLLER-SPECIFIC LOCK ===
+		// Skip a controller WordPress is syncing, and keep the lock (shared) while polling it,
+		// so a sync can't start sending requests in between ours.
+		release, ok := tryControllerLock(sn)
+		if !ok {
+			continue
 		}
 
 		// Loop through the doors configured for this specific controller.
@@ -61,7 +56,42 @@ func runPoll(u uhppote.IUHPPOTE) {
 			// Send the status update to the monitor service in the background.
 			go sendGateStatusToMonitor(door.ID, status)
 		}
+		release()
 	}
+}
+
+// syncLockDir holds WordPress's sync locks (fsbhoa_uhppote_lock() in fsbhoa-uhppote-sync-service.php).
+// They are flock() locks, which the kernel drops when the process holding them ends, so a sync that
+// crashed or was killed never leaves a controller unpolled. (Not /tmp: Apache runs with PrivateTmp.)
+const syncLockDir = "/var/lib/fsbhoa/locks"
+
+var lockOpenWarned sync.Map // serial => true, so an unreadable lock file is logged once
+
+// tryControllerLock takes a shared lock on a controller's sync lock file without waiting.
+// ok is false while a sync holds the lock; otherwise call release() after polling.
+func tryControllerLock(sn uint32) (release func(), ok bool) {
+	f, err := os.Open(fmt.Sprintf("%s/uhppote_controller_%d.lock", syncLockDir, sn))
+	if err != nil {
+		// No file: no sync has talked to this controller yet. Any other error: poll anyway.
+		if !os.IsNotExist(err) {
+			if _, warned := lockOpenWarned.LoadOrStore(sn, true); !warned {
+				log.Printf("WARN POLLER: Could not open the sync lock for %d (polling anyway): %v", sn, err)
+			}
+		}
+		return func() {}, true
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, false // a sync is running on this controller
+		}
+		log.Printf("WARN POLLER: Could not lock the sync lock for %d (polling anyway): %v", sn, err)
+		return func() {}, true
+	}
+	return func() {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, true
 }
 
 // getDoorStatus is a helper function to get a single door's status string.

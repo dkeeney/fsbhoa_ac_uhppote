@@ -12,6 +12,88 @@ add_action('fsbhoa_run_nightly_rebuild', 'fsbhoa_perform_nightly_rebuild_sync');
 add_action('fsbhoa_run_full_wipe_rebuild',   'fsbhoa_perform_full_wipe_rebuild');
 add_action('fsbhoa_run_daily_time_sync', 'fsbhoa_perform_daily_time_sync');
 
+define('FSBHOA_UHPPOTE_LOCK_DIR', '/var/lib/fsbhoa/locks');
+define('FSBHOA_UHPPOTE_REBUILD_LOCK_WAIT', 600); // seconds a nightly or forced rebuild waits for a running sync
+
+/**
+ * Sync locks are flock() locks on files in FSBHOA_UHPPOTE_LOCK_DIR. The kernel releases a flock
+ * when its process ends, so a crash, timeout or restart never leaves a stale lock (the files
+ * stay, unlocked). Not /tmp: Apache runs with PrivateTmp, so the event service can't see PHP's /tmp.
+ * - uhppote_sync.lock: one sync at a time.
+ * - uhppote_controller_<serial>.lock: held while PHP talks to that controller. The event service's
+ *   status poller skips a controller while its lock is held (status_poller.go).
+ *
+ * @param string $name  Lock file name.
+ * @param int    $wait  Seconds to wait for the lock; 0 means don't wait.
+ * @param bool   $error Set to true if the lock file couldn't be opened (as opposed to being busy).
+ * @return resource|false The open lock, for fsbhoa_uhppote_unlock(), or false if not taken.
+ */
+function fsbhoa_uhppote_lock($name, $wait = 0, &$error = false) {
+    $error = false;
+    if (!is_dir(FSBHOA_UHPPOTE_LOCK_DIR) && !@mkdir(FSBHOA_UHPPOTE_LOCK_DIR, 0775, true)) {
+        error_log("SYNC LOCK ERROR: Could not create " . FSBHOA_UHPPOTE_LOCK_DIR);
+        $error = true;
+        return false;
+    }
+    $handle = @fopen(FSBHOA_UHPPOTE_LOCK_DIR . '/' . $name, 'c');
+    if ($handle === false) {
+        error_log("SYNC LOCK ERROR: Could not open " . FSBHOA_UHPPOTE_LOCK_DIR . "/$name");
+        $error = true;
+        return false;
+    }
+    $deadline = time() + $wait;
+    while (!flock($handle, LOCK_EX | LOCK_NB)) {
+        if (time() >= $deadline) {
+            fclose($handle);
+            return false;
+        }
+        sleep(1);
+    }
+    return $handle;
+}
+
+function fsbhoa_uhppote_unlock($handle) {
+    if ($handle) {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+    }
+}
+
+/**
+ * Takes the one-sync-at-a-time lock. If another sync holds it, this sync doesn't run and the
+ * pending changes stay for the next sync.
+ * @param string $caption Which sync, for the log (e.g. 'Delta sync').
+ * @param int    $wait    Seconds to wait for a running sync to finish.
+ * @return resource|false
+ */
+function fsbhoa_uhppote_acquire_sync_lock($caption, $wait) {
+    $lock = fsbhoa_uhppote_lock('uhppote_sync.lock', $wait, $error);
+    if ($lock) {
+        return $lock;
+    }
+    if ($error) {
+        $msg = "$caption could not start: the sync lock in " . FSBHOA_UHPPOTE_LOCK_DIR . " couldn't be opened. Pending changes were kept.";
+        set_transient('fsbhoa_sync_status', ['status' => 'failed', 'message' => $msg . ' Check logs.'], MINUTE_IN_SECONDS * 10);
+    } else {
+        $msg = "$caption did not run: another controller sync was still running" . ($wait ? " after {$wait}s" : '') . ". Pending changes were kept for the next sync.";
+    }
+    error_log("SYNC LOCK: $msg");
+    // A skipped push shows as pending on the banner; a skipped rebuild has no next try until tomorrow
+    if (($error || $wait > 0) && function_exists('fsbhoa_send_discord_alert')) {
+        fsbhoa_send_discord_alert($msg);
+    }
+    return false;
+}
+
+/**
+ * The newest pending change, read before a sync reads any data. The sync clears only changes up
+ * to this one, so a change saved while it runs stays pending for the next sync.
+ */
+function fsbhoa_uhppote_pending_change_mark() {
+    global $wpdb;
+    return (int) $wpdb->get_var("SELECT COALESCE(MAX(id), 0) FROM ac_pending_changes");
+}
+
 /**
  * fsbhoa_perform_delta_sync()
  * Triggered by "Push Changes Now" on core's banner (fsbhoa_push_to_controllers).
@@ -19,34 +101,47 @@ add_action('fsbhoa_run_daily_time_sync', 'fsbhoa_perform_daily_time_sync');
 function fsbhoa_perform_delta_sync() {
     global $wpdb;
     $is_dry_run = (get_option('fsbhoa_ac_sync_dry_run') === 'on');
-    
+
     error_log("DELTA SYNC: Manual process started.");
     if ($is_dry_run) { error_log("DELTA SYNC: --- DRY RUN MODE ENABLED ---"); }
 
-    set_time_limit(300);
-    set_transient('fsbhoa_sync_status', ['status' => 'in_progress', 'message' => 'Starting delta sync...'], MINUTE_IN_SECONDS * 10);
+    // One sync at a time. If one is running, its progress stays on the banner, and the changes
+    // it didn't pick up stay pending.
+    $sync_lock = fsbhoa_uhppote_acquire_sync_lock('Delta sync', 0);
+    if (!$sync_lock) {
+        return;
+    }
 
-    $wipe_memory   = false;
-    $active_schedule_id = fsbhoa_get_active_schedule_id();
-    $permission_data = fsbhoa_get_all_permission_data($active_schedule_id);
+    try {
+        set_time_limit(300);
+        set_transient('fsbhoa_sync_status', ['status' => 'in_progress', 'message' => 'Starting delta sync...'], MINUTE_IN_SECONDS * 10);
 
-    $cardholders_to_sync = Fsbhoa_Permission_Compiler::get_badges_to_sync();
+        $pending_upto  = fsbhoa_uhppote_pending_change_mark();
+        $wipe_memory   = false;
+        $active_schedule_id = fsbhoa_get_active_schedule_id();
+        $permission_data = fsbhoa_get_all_permission_data($active_schedule_id);
+
+        $cardholders_to_sync = Fsbhoa_Permission_Compiler::get_badges_to_sync();
 
 
-    // Get the controllers
-    $controllers = $wpdb->get_results("SELECT * FROM ac_controllers WHERE type = 'UHPPOTE'");
+        // Get the controllers
+        $controllers = $wpdb->get_results("SELECT * FROM ac_controllers WHERE type = 'UHPPOTE'");
 
-    //  Execute the Logic
-    fsbhoa_execute_sync_logic(
-        $controllers, 
-        $permission_data,
-        $cardholders_to_sync, 
-        $is_dry_run, 
-        $wipe_memory,
-        $active_schedule_id,
-        false,
-        'Delta sync'
-    );
+        //  Execute the Logic
+        fsbhoa_execute_sync_logic(
+            $controllers,
+            $permission_data,
+            $cardholders_to_sync,
+            $is_dry_run,
+            $wipe_memory,
+            $active_schedule_id,
+            false,
+            'Delta sync',
+            $pending_upto
+        );
+    } finally {
+        fsbhoa_uhppote_unlock($sync_lock);
+    }
 }
 
 /**
@@ -85,21 +180,34 @@ function fsbhoa_run_rebuild_pipeline( $wipe_memory, $caption ) {
     $is_dry_run = (get_option('fsbhoa_ac_sync_dry_run') === 'on');
     if ($is_dry_run) { error_log("NIGHTLY REBUILD: --- DRY RUN MODE ENABLED ---"); }
 
-    $active_schedule_id = fsbhoa_get_active_schedule_id();
-    error_log($caption . ": Determined active schedule ID is: " . $active_schedule_id);
-    $permission_data = fsbhoa_get_all_permission_data($active_schedule_id);
-    $cardholders_to_sync = Fsbhoa_Permission_Compiler::get_badges_to_sync();
-    $controllers = $wpdb->get_results("SELECT * FROM ac_controllers WHERE type = 'UHPPOTE'");
+    // One sync at a time. A rebuild waits for a running sync: the nightly one has no other try
+    // until tomorrow (the day's schedule may have changed).
+    $sync_lock = fsbhoa_uhppote_acquire_sync_lock(ucfirst(strtolower($caption)), FSBHOA_UHPPOTE_REBUILD_LOCK_WAIT);
+    if (!$sync_lock) {
+        return;
+    }
 
-    fsbhoa_execute_sync_logic(
-        $controllers, 
-        $permission_data, 
-        $cardholders_to_sync, 
-        $is_dry_run, 
-        $wipe_memory, 
-        $active_schedule_id,
-        true, // nightly and forced rebuilds always re-send the task lists (they can't be read back)
-        ucfirst(strtolower($caption)));
+    try {
+        $pending_upto = fsbhoa_uhppote_pending_change_mark();
+        $active_schedule_id = fsbhoa_get_active_schedule_id();
+        error_log($caption . ": Determined active schedule ID is: " . $active_schedule_id);
+        $permission_data = fsbhoa_get_all_permission_data($active_schedule_id);
+        $cardholders_to_sync = Fsbhoa_Permission_Compiler::get_badges_to_sync();
+        $controllers = $wpdb->get_results("SELECT * FROM ac_controllers WHERE type = 'UHPPOTE'");
+
+        fsbhoa_execute_sync_logic(
+            $controllers,
+            $permission_data,
+            $cardholders_to_sync,
+            $is_dry_run,
+            $wipe_memory,
+            $active_schedule_id,
+            true, // nightly and forced rebuilds always re-send the task lists (they can't be read back)
+            ucfirst(strtolower($caption)),
+            $pending_upto);
+    } finally {
+        fsbhoa_uhppote_unlock($sync_lock);
+    }
 }
 
 
@@ -113,8 +221,11 @@ function fsbhoa_run_rebuild_pipeline( $wipe_memory, $caption ) {
  *    $active_schedule_id  - which schedule to use.
  *    $always_send_tasks   - re-send the task lists even if unchanged (rebuilds; they can't be read back).
  *    $caption             - which sync this is, for the failure alert (e.g. 'Delta sync', 'Nightly rebuild').
+ *    $pending_upto        - newest ac_pending_changes id read before the data (fsbhoa_uhppote_pending_change_mark());
+ *                           only changes up to it are cleared on success. Null clears them all.
+ *    The caller holds the sync lock (fsbhoa_uhppote_acquire_sync_lock()).
  */
-function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_to_sync, $is_dry_run, $wipe_memory, $active_schedule_id, $always_send_tasks = false, $caption = 'Sync') {
+function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_to_sync, $is_dry_run, $wipe_memory, $active_schedule_id, $always_send_tasks = false, $caption = 'Sync', $pending_upto = null) {
     global $wpdb;
     $retry_attempts = 3;
     $retry_wait = 250000;
@@ -158,24 +269,31 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
             'message' => 'Processing controller: ' . esc_html($friendly_name) . '...'
         ], MINUTE_IN_SECONDS * 10);
 
-        // Check Online Status (a single reply can be lost, so try three times)
-        $online = false;
-        for ($i = 0; $i < 3 && !$online; $i++) {
-            if ($i > 0) sleep(1);
-            $status_output = fsbhoa_uhppote_cli_exec($device_id, sprintf('get-status %s', $device_id), '--timeout 2s');
-            $online = (strpos($status_output, 'ERROR') === false && !empty(trim($status_output)));
+        // === CONTROLLER-SPECIFIC LOCK ===
+        // Held while we talk to this controller, so the event service's status poller doesn't
+        // send requests in between ours (back-to-back requests get wrong replies). The poller
+        // holds it only for one poll, so waiting a little is enough.
+        $controller_lock = fsbhoa_uhppote_lock("uhppote_controller_{$device_id}.lock", 30);
+        if (!$controller_lock) {
+            error_log("SYNC WARNING: Could not take the controller lock for '$friendly_name' ($device_id); the status poller may send requests during this sync.");
         }
-        if (!$online) {
-            // Not a success: keep the pending changes so the next sync tries this controller again
-            error_log("SYNC FAILED: Controller '$friendly_name' ($device_id) did not answer. Skipping it.");
-            $failed_controllers[] = "$friendly_name (not answering)";
-            $global_sync_failed = true;
-            continue;
-        }
-        // === CREATE CONTROLLER-SPECIFIC LOCK ===
-        $lock_file = "/tmp/fsbhoa_sync_active_{$device_id}.lock";
-        file_put_contents($lock_file, time());
         try {
+            // Check Online Status (a single reply can be lost, so try three times)
+            $online = false;
+            for ($i = 0; $i < 3 && !$online; $i++) {
+                if ($i > 0) sleep(1);
+                $status_output = fsbhoa_uhppote_cli_exec($device_id, sprintf('get-status %s', $device_id), '--timeout 2s');
+                $online = (strpos($status_output, 'ERROR') === false && !empty(trim($status_output)));
+            }
+            if (!$online) {
+                // Not a success: keep the pending changes so the next sync tries this controller again
+                error_log("SYNC FAILED: Controller '$friendly_name' ($device_id) did not answer. Skipping it.");
+                $failed_controllers[] = "$friendly_name (not answering)";
+                $global_sync_failed = true;
+                continue; // the finally block releases the lock
+            }
+
+
             if (!$is_dry_run) { 
                 fsbhoa_uhppote_cli_exec($device_id, sprintf('set-time %s', $device_id));
 
@@ -298,6 +416,7 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                         $output = fsbhoa_uhppote_cli_exec($device_id, $delay_args);
                         if (strpos($output, 'ERROR') !== false) {
                             error_log("SYNC FAILED (DELAY) for Door $door_num on $device_id: " . trim($output));
+                            $controller_failed = true;
                         } else {
                             error_log("SYNC SERVICE (DELAY): Door $door_num set to $delay seconds.");
                         }
@@ -333,8 +452,8 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                 $global_sync_failed = true;
             }
             // === RELEASE THE LOCK BEFORE MOVING TO NEXT CONTROLLER ===
-            if (file_exists($lock_file)) {
-                unlink($lock_file);
+            if ($controller_lock) {
+                fsbhoa_uhppote_unlock($controller_lock);
                 if (FSBHOA_DEBUG_MODE) error_log("SYNC SERVICE: Released lock for $friendly_name ($device_id).");
             }
         }
@@ -352,13 +471,19 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                 fsbhoa_send_discord_alert("$caption failed on: $failed_list. Those controllers may be missing changes; the pending changes were kept, so the next sync will try again. Please check the error logs.");
             }
         } else {
-            // Success: Clear the pending changes table to remove the GUI banner
-            $wpdb->query("DELETE FROM ac_pending_changes");
-           
+            // Success: clear the pending changes this sync picked up. Changes saved while it ran
+            // stay pending, so the banner asks for another push.
+            if ($pending_upto === null) {
+                $wpdb->query("DELETE FROM ac_pending_changes");
+            } else {
+                $wpdb->query($wpdb->prepare("DELETE FROM ac_pending_changes WHERE id <= %d", $pending_upto));
+            }
+
             $final_message = "sync complete.";
             set_transient('fsbhoa_sync_status', ['status' => 'complete', 'message' => $final_message], MINUTE_IN_SECONDS * 5);
-            
-            error_log("SYNC EXECUTE: Process finished successfully. ac_pending_changes cleared.");
+
+            $left = (int) $wpdb->get_var("SELECT COUNT(*) FROM ac_pending_changes");
+            error_log("SYNC EXECUTE: Process finished successfully. ac_pending_changes cleared" . ($left ? "; $left change(s) saved during the sync are still pending." : '.'));
             fsbhoa_rebuild_monitor_status_cache();
         }
     } else {
@@ -605,6 +730,12 @@ function fsbhoa_perform_daily_time_sync() {
     }
 
     foreach ($controllers as $controller) {
+        // Not while a sync is talking to this controller (requests in between get wrong replies)
+        $controller_lock = fsbhoa_uhppote_lock("uhppote_controller_{$controller->uhppoted_device_id}.lock", 30);
+        if (!$controller_lock) {
+            error_log("DAILY TIME SYNC: Controller " . $controller->friendly_name . " is busy (sync running). Skipping; the next sync sets its time.");
+            continue;
+        }
         $status_output = fsbhoa_uhppote_cli_exec($controller->uhppoted_device_id, sprintf('get-status %s', $controller->uhppoted_device_id), '--timeout 2s');
 
         if (strpos($status_output, 'ERROR') === false && !empty(trim($status_output))) {
@@ -613,6 +744,7 @@ function fsbhoa_perform_daily_time_sync() {
         } else {
             error_log("DAILY TIME SYNC: Controller " . $controller->friendly_name . " is offline. Skipping.");
         }
+        fsbhoa_uhppote_unlock($controller_lock);
     }
     error_log("DAILY TIME SYNC: Complete.");
 }

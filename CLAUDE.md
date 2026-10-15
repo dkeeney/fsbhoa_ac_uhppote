@@ -80,6 +80,8 @@ All sync entry points are in `includes/fsbhoa-uhppote-sync-service.php`.
 | Force Full Rebuild (`fsbhoa_perform_full_wipe_rebuild`) | "Force Full Rebuild" button on the controller list | Always. Use it to clean up when something goes wrong. |
 
 - **A sync fails, rather than skipping, when a controller doesn't answer** (three `get-status` tries) or any step fails on it. The pending changes are then kept, so the next sync tries again, and a Discord alert names the sync and the controllers.
+- **One sync at a time.** Syncs take an `flock` on `/var/lib/fsbhoa/locks/uhppote_sync.lock`. A delta sync that finds another running doesn't run, and its changes stay pending. The nightly sync and Force Full Rebuild wait up to 10 minutes, then give up with a Discord alert. A sync clears only the pending changes saved before it started, so a change saved while it runs stays pending.
+- **Controller locks.** While PHP talks to a controller it holds `/var/lib/fsbhoa/locks/uhppote_controller_<serial>.lock`, and the event service's status poller skips that controller. The kernel drops an `flock` when its process ends, so a crash or restart never leaves a lock behind. They aren't in `/tmp` because Apache runs with `PrivateTmp`, so the event service can't see PHP's `/tmp`.
 - **The nightly sync matters.** Holiday schedules mean the active schedule can change from one day to the next, so the controllers must be reconfigured at the start of each day.
 - **The compiler can decide to wipe on its own**, in `generate_sync_data()`:
   - When the active schedule ID differs from the one saved in the `fsbhoa_profile_persistent_maps` option, or that saved map is missing. This covers a nightly sync on the day a holiday schedule starts or ends.
