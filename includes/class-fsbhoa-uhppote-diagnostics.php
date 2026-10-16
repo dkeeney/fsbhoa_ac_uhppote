@@ -4,6 +4,9 @@
 if ( ! defined( 'WPINC' ) ) { die; }
 
 class Fsbhoa_Uhppote_Diagnostics {
+    // Differences per controller the audit looks up by number to rule out misreads of the card
+    // list. More than this is a real problem, and looking them all up would take too long.
+    const MAX_CONFIRM = 50;
 
     public function __construct() {
         add_action( 'fsbhoa_admin_diagnostics_tools', [ $this, 'render_hardware_audit_ui' ] );
@@ -205,9 +208,6 @@ class Fsbhoa_Uhppote_Diagnostics {
                     $unexpected_list[] = $hw_rfid;
                 }
             }
-            $missing_from_hw  = count( $missing_list );
-            $unexpected_on_hw = count( $unexpected_list );
-
             // Cards that are there but hold the wrong dates or door settings
             $card_mismatches = array(); // [card] => "door 2 N, expected 14; ..."
             foreach ( $expected_rows as $rfid => $row ) {
@@ -218,6 +218,62 @@ class Fsbhoa_Uhppote_Diagnostics {
                     }
                 }
             }
+
+            // get-cards reads every slot back to back, and a wrong reply now and then shows up as a
+            // missing card, an unexpected one or wrong settings (2026-10-16 on .53: card 14053830
+            // read as 390078487). Look each one up by number before reporting it.
+            $misreads = array(); // [card] => what the card list said and what the lookup found
+            $suspects = count( $missing_list ) + count( $unexpected_list ) + count( $card_mismatches );
+            if ( $suspects > self::MAX_CONFIRM ) {
+                $notes[] = "{$name} ({$device_id}) has {$suspects} differences, more than the " . self::MAX_CONFIRM . ' the audit looks up by number to rule out misreads, so none were looked up.';
+            } elseif ( $suspects > 0 ) {
+                foreach ( $card_mismatches as $rfid => $desc ) {
+                    $c = $this->read_card_by_number( $device_id, $rfid, $door_count );
+                    if ( $c['outcome'] === 'found'
+                        && empty( $this->describe_card_differences( $expected_rows[ $rfid ], $c['from'], $c['to'], $c['doors'], $doors_cfg ) ) ) {
+                        unset( $card_mismatches[ $rfid ] );
+                        $hw_cards[ $rfid ] = $c['doors'];
+                        $hw_dates[ $rfid ] = array( $c['from'], $c['to'] );
+                        $misreads[ $rfid ] = "the card list said {$desc}; correct when looked up by number";
+                    }
+                }
+                $found_missing = 0;
+                foreach ( $missing_list as $k => $rfid ) {
+                    $c = $this->read_card_by_number( $device_id, $rfid, $door_count );
+                    if ( $c['outcome'] !== 'found' ) {
+                        continue;
+                    }
+                    unset( $missing_list[ $k ] );
+                    $found_missing++;
+                    $hw_cards[ $rfid ] = $c['doors'];
+                    $hw_dates[ $rfid ] = array( $c['from'], $c['to'] );
+                    $misreads[ $rfid ] = 'missing from the card list, but found by number';
+                    if ( isset( $expected_rows[ $rfid ] ) ) {
+                        $diffs = $this->describe_card_differences( $expected_rows[ $rfid ], $c['from'], $c['to'], $c['doors'], $doors_cfg );
+                        if ( ! empty( $diffs ) ) {
+                            $card_mismatches[ $rfid ] = implode( '; ', $diffs );
+                        }
+                    }
+                }
+                // A card stored out of order is also NO RECORD by number, so an unexpected card is put
+                // down to a misread only in place of a missing card that turned up.
+                foreach ( $unexpected_list as $k => $rfid ) {
+                    if ( $found_missing === 0 ) {
+                        break;
+                    }
+                    $c = $this->read_card_by_number( $device_id, $rfid, $door_count );
+                    if ( $c['outcome'] === 'not_found' ) {
+                        unset( $unexpected_list[ $k ], $hw_cards[ $rfid ], $hw_dates[ $rfid ] );
+                        $found_missing--;
+                        $misreads[ $rfid ] = 'in the card list, but NO RECORD by number: a misread of a card that was found by number';
+                    }
+                }
+                $missing_list    = array_values( $missing_list );
+                $unexpected_list = array_values( $unexpected_list );
+                $hw_count        = count( $hw_cards );
+            }
+            $missing_from_hw  = count( $missing_list );
+            $unexpected_on_hw = count( $unexpected_list );
 
 
             $profile_results = array();
@@ -327,6 +383,8 @@ class Fsbhoa_Uhppote_Diagnostics {
                 'card_mismatch_count'         => count( $card_mismatches ),
                 'card_mismatch_sample'        => array_slice( $card_mismatches, 0, $sample, true ),
                 'profile_mismatches'          => $profile_mismatches,
+                'misread_count'               => count( $misreads ),
+                'misreads'                    => array_slice( $misreads, 0, $sample, true ),
                 'lookup'                      => $lookup === null ? null : array(
                     'checked'          => $lookup['checked'],
                     'not_found_count'  => count( $lookup['not_found'] ),
@@ -372,7 +430,13 @@ class Fsbhoa_Uhppote_Diagnostics {
         if ( $r['lookup'] !== null ) {
             $line .= "; looked up {$r['lookup']['checked']} by number: not found {$r['lookup']['not_found_count']}, wrong {$r['lookup']['wrong_count']}, unreadable {$r['lookup']['unreadable_count']}";
         }
+        if ( $r['misread_count'] > 0 ) {
+            $line .= "; card list misreads ruled out by number {$r['misread_count']}";
+        }
         error_log( $line . '.' );
+        if ( $r['misread_count'] > 0 ) {
+            error_log( "HARDWARE AUDIT: {$r['name']} ({$r['device_id']}) card list misreads: " . wp_json_encode( $r['misreads'] ) );
+        }
 
         if ( $r['status'] === 'OK' ) {
             return;
@@ -424,8 +488,6 @@ class Fsbhoa_Uhppote_Diagnostics {
     /**
      * Looks up each card by number (get-card), which uses the same search as a swipe. A card out
      * of order in the controller's table is listed by get-cards but not found here.
-     * A reply that can't be read, or NO RECORD, is asked again once, since the controller
-     * occasionally gives a wrong reply.
      * @return array checked, not_found [cards], wrong [card => differences], unreadable [cards]
      */
     private function lookup_cards( $device_id, $expected_rows, $doors_cfg, $door_count ) {
@@ -434,38 +496,51 @@ class Fsbhoa_Uhppote_Diagnostics {
 
         $result = array( 'checked' => 0, 'not_found' => array(), 'wrong' => array(), 'unreadable' => array() );
         foreach ( $expected_rows as $rfid => $row ) {
-            $outcome = 'unreadable';
-            $tokens  = array();
-            for ( $try = 0; $try < 2; $try++ ) {
-                $out = trim( fsbhoa_uhppote_cli_exec( $device_id, sprintf( 'get-card %s %d', $device_id, (int) $rfid ) ) );
-                usleep( 150000 ); // pace requests: back-to-back requests get wrong replies
-                // e.g. "425043852  15222    2026-07-10 2099-12-31 N N N N" or "425043852 15174 NO RECORD"
-                $tokens = preg_split( '/\s+/', $out );
-                if ( stripos( $out, 'NO RECORD' ) !== false ) {
-                    $outcome = 'not_found';
-                } elseif ( count( $tokens ) >= 4 + $door_count && (string)(int) $tokens[1] === (string) $rfid ) {
-                    $outcome = 'found';
-                    break;
-                } else {
-                    $outcome = 'unreadable';
-                }
-            }
+            $c = $this->read_card_by_number( $device_id, $rfid, $door_count );
             $result['checked']++;
 
-            if ( $outcome === 'found' ) {
-                $door_vals = array();
-                for ( $d = 1; $d <= $door_count; $d++ ) {
-                    $door_vals[ $d ] = $tokens[ 3 + $d ];
-                }
-                $diffs = $this->describe_card_differences( $row, $tokens[2], $tokens[3], $door_vals, $doors_cfg );
+            if ( $c['outcome'] === 'found' ) {
+                $diffs = $this->describe_card_differences( $row, $c['from'], $c['to'], $c['doors'], $doors_cfg );
                 if ( ! empty( $diffs ) ) {
                     $result['wrong'][ $rfid ] = implode( '; ', $diffs );
                 }
             } else {
-                $result[ $outcome ][] = $rfid;
+                $result[ $c['outcome'] ][] = $rfid;
             }
         }
         return $result;
+    }
+
+    /**
+     * Looks up one card by number (get-card). A reply that can't be read, or NO RECORD, is asked
+     * again once, since the controller occasionally gives a wrong reply.
+     * @return array outcome (found, not_found or unreadable); when found, from, to and doors [door number] => N, Y or a profile
+     */
+    private function read_card_by_number( $device_id, $rfid, $door_count ) {
+        $outcome = 'unreadable';
+        $tokens  = array();
+        for ( $try = 0; $try < 2; $try++ ) {
+            $out = trim( fsbhoa_uhppote_cli_exec( $device_id, sprintf( 'get-card %s %d', $device_id, (int) $rfid ) ) );
+            usleep( 150000 ); // pace requests: back-to-back requests get wrong replies
+            // e.g. "425043852  15222    2026-07-10 2099-12-31 N N N N" or "425043852 15174 NO RECORD"
+            $tokens = preg_split( '/\s+/', $out );
+            if ( stripos( $out, 'NO RECORD' ) !== false ) {
+                $outcome = 'not_found';
+            } elseif ( count( $tokens ) >= 4 + $door_count && (string)(int) $tokens[1] === (string) $rfid ) {
+                $outcome = 'found';
+                break;
+            } else {
+                $outcome = 'unreadable';
+            }
+        }
+        if ( $outcome !== 'found' ) {
+            return array( 'outcome' => $outcome );
+        }
+        $doors = array();
+        for ( $d = 1; $d <= $door_count; $d++ ) {
+            $doors[ $d ] = $tokens[ 3 + $d ];
+        }
+        return array( 'outcome' => 'found', 'from' => $tokens[2], 'to' => $tokens[3], 'doors' => $doors );
     }
 }
 
