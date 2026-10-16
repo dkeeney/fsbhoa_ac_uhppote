@@ -347,10 +347,53 @@ class Fsbhoa_Uhppote_Diagnostics {
             );
         }
 
+        // The same results in the log, so they can be read without the page
+        foreach ( $notes as $note ) {
+            error_log( "HARDWARE AUDIT NOTE: {$note}" );
+        }
+        foreach ( $reports as $r ) {
+            $this->log_report( $r );
+        }
+
         wp_send_json_success( array(
             'notes'   => $notes,
             'reports' => $reports,
         ) );
+    }
+
+    /**
+     * Writes one controller's audit result to the log: a summary line, then a line for each
+     * kind of difference found (with the same sample of card numbers the page shows).
+     */
+    private function log_report( $r ) {
+        $line = "HARDWARE AUDIT: {$r['name']} ({$r['device_id']}) {$r['status']}: {$r['total_hw']} cards on the controller, {$r['total_db']} expected";
+        $line .= "; missing {$r['missing_from_hw']}, unexpected {$r['unexpected_on_hw']}, different {$r['card_mismatch_count']}";
+        $line .= ', profiles differing ' . count( $r['profile_mismatches'] );
+        if ( $r['lookup'] !== null ) {
+            $line .= "; looked up {$r['lookup']['checked']} by number: not found {$r['lookup']['not_found_count']}, wrong {$r['lookup']['wrong_count']}, unreadable {$r['lookup']['unreadable_count']}";
+        }
+        error_log( $line . '.' );
+
+        if ( $r['status'] === 'OK' ) {
+            return;
+        }
+        $details = array(
+            'missing from the controller' => $r['missing_sample'],
+            'unexpected on the controller' => $r['unexpected_sample'],
+            'cards differing'              => $r['card_mismatch_sample'],
+            'profiles differing'           => $r['profile_mismatches'],
+            'cards with bad settings'      => $r['cards_with_bad_syntax'],
+            'missing profiles'             => $r['missing_profiles'],
+            'cards using missing profiles' => $r['cards_with_missing_profiles'],
+            'not found by number'          => $r['lookup']['not_found'] ?? array(),
+            'wrong by number'              => $r['lookup']['wrong'] ?? array(),
+            'unreadable by number'         => $r['lookup']['unreadable'] ?? array(),
+        );
+        foreach ( $details as $what => $list ) {
+            if ( ! empty( $list ) ) {
+                error_log( "HARDWARE AUDIT: {$r['name']} ({$r['device_id']}) {$what}: " . wp_json_encode( $list ) );
+            }
+        }
     }
 
     /**
