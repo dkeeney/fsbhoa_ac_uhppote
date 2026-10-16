@@ -14,8 +14,17 @@
 //     cards with a binary search; a card appended later, out of order, can't be found).
 //   - It only talks to controllers by the address in the config. A controller without one
 //     is refused (uhppote-cli would broadcast).
+//   - When a controller holds only a few cards (fewCards), each one is printed with its slot.
+//     That shows which card a `delete-all` left behind.
 //
-// Usage: fsbhoa_load_acl --config <conf> [--pace 5ms] [--timeout 2.5s] <TSV file>
+// With --count it writes nothing: it prints one controller's card count (`cards:N`) and lists
+// the cards if there are only a few. The bulk sync uses it to check that a `delete-all` emptied
+// the controller.
+//
+// Usage:
+//
+//	fsbhoa_load_acl --config <conf> [--pace 5ms] [--timeout 2.5s] <TSV file>
+//	fsbhoa_load_acl --config <conf> --count <serial>
 package main
 
 import (
@@ -39,6 +48,7 @@ const (
 	maxEmpty    = 1000                   // empty slots in a row, past the card count, that end the scan
 	confirmPast = 10                     // empty slots up to this far past the count are read twice
 	maxWarns    = 5                      // warnings printed, like load-acl
+	fewCards    = 10                     // a controller with this many cards or fewer has each one printed
 )
 
 var pace time.Duration
@@ -48,10 +58,12 @@ func main() {
 	flag.DurationVar(&pace, "pace", 5*time.Millisecond, "pause after each request to a controller")
 	timeout := flag.Duration("timeout", 2500*time.Millisecond, "how long to wait for each reply")
 	debug := flag.Bool("debug", false, "print every request and reply")
+	countID := flag.Uint("count", 0, "print this controller's card count (and its cards, if only a few) and write nothing")
 	flag.Parse()
 
-	if *confPath == "" || flag.NArg() != 1 {
-		fail(fmt.Errorf("usage: fsbhoa_load_acl --config <conf> [--pace 5ms] [--timeout 2.5s] <TSV file>"))
+	if *confPath == "" || (*countID == 0 && flag.NArg() != 1) || (*countID != 0 && flag.NArg() != 0) {
+		fail(fmt.Errorf("usage: fsbhoa_load_acl --config <conf> [--pace 5ms] [--timeout 2.5s] <TSV file>\n" +
+			"          fsbhoa_load_acl --config <conf> --count <serial>"))
 	}
 
 	conf := config.NewConfig()
@@ -69,18 +81,6 @@ func main() {
 		}
 	}
 
-	tsv, err := os.ReadFile(flag.Arg(0))
-	if err != nil {
-		fail(err)
-	}
-	list, warnings, err := acl.ParseTSV(bytes.NewReader(tsv), devices, false)
-	if err != nil {
-		fail(err)
-	}
-	for _, w := range warnings {
-		fmt.Printf("   ... WARNING    %v\n", w)
-	}
-
 	var bind types.BindAddr
 	var broadcast types.BroadcastAddr
 	var listen types.ListenAddr
@@ -94,6 +94,23 @@ func main() {
 		listen = *conf.ListenAddress
 	}
 	u := uhppote.NewUHPPOTE(bind, broadcast, listen, *timeout, devices, *debug)
+
+	if *countID != 0 {
+		count(u, devices, uint32(*countID), *confPath)
+		return
+	}
+
+	tsv, err := os.ReadFile(flag.Arg(0))
+	if err != nil {
+		fail(err)
+	}
+	list, warnings, err := acl.ParseTSV(bytes.NewReader(tsv), devices, false)
+	if err != nil {
+		fail(err)
+	}
+	for _, w := range warnings {
+		fmt.Printf("   ... WARNING    %v\n", w)
+	}
 
 	ids := []uint32{}
 	for id := range list {
@@ -131,6 +148,29 @@ func main() {
 func fail(err error) {
 	fmt.Fprintf(os.Stderr, "\n   ERROR: %v\n\n", err)
 	os.Exit(1)
+}
+
+// count prints one controller's card count as `cards:N`, and lists its cards (readCards does)
+// if there are only a few. A count it can't read is a failure; cards it can't find are not,
+// since the count is what the caller acts on.
+func count(u uhppote.IUHPPOTE, devices []uhppote.Device, id uint32, confPath string) {
+	found := false
+	for _, d := range devices {
+		found = found || d.DeviceID == id
+	}
+	if !found {
+		fail(fmt.Errorf("controller %v is not in %s; refusing to broadcast", id, confPath))
+	}
+	n, err := readCount(u, id)
+	if err != nil {
+		fail(err)
+	}
+	fmt.Printf("   ... %v  cards:%v\n", id, n)
+	if n > 0 && n <= fewCards {
+		if _, err := readCards(u, id); err != nil {
+			fmt.Printf("   ... %v  could not list them: %v\n", id, err)
+		}
+	}
 }
 
 type report struct {
@@ -248,9 +288,9 @@ func checkProfiles(u uhppote.IUHPPOTE, id uint32, wanted map[uint32]types.Card) 
 	return missing, nil
 }
 
-// readCards reads every card on the controller. The card count is read until two reads
-// agree: a wrong count (seen when requests came too fast) made load-acl scan without end.
-func readCards(u uhppote.IUHPPOTE, id uint32) (map[uint32]types.Card, error) {
+// readCount reads the card count until two reads agree: a wrong count (seen when requests
+// came too fast) made load-acl scan without end.
+func readCount(u uhppote.IUHPPOTE, id uint32) (uint32, error) {
 	var n uint32
 	agreed := false
 	for i := 0; i < attempts+1 && !agreed; i++ {
@@ -259,14 +299,24 @@ func readCards(u uhppote.IUHPPOTE, id uint32) (map[uint32]types.Card, error) {
 			c, err := u.GetCards(id)
 			time.Sleep(pace)
 			if err != nil {
-				return nil, fmt.Errorf("could not read the card count: %v", err)
+				return 0, fmt.Errorf("could not read the card count: %v", err)
 			}
 			counts[j] = c
 		}
 		n, agreed = counts[0], counts[0] == counts[1]
 	}
 	if !agreed {
-		return nil, fmt.Errorf("the card count reads differently each time")
+		return 0, fmt.Errorf("the card count reads differently each time")
+	}
+	return n, nil
+}
+
+// readCards reads every card on the controller. If there are only a few (fewCards), each is
+// printed with its slot.
+func readCards(u uhppote.IUHPPOTE, id uint32) (map[uint32]types.Card, error) {
+	n, err := readCount(u, id)
+	if err != nil {
+		return nil, err
 	}
 
 	// Slots past the last card and slots of deleted cards both read as empty, so a count that
@@ -292,6 +342,9 @@ func readCards(u uhppote.IUHPPOTE, id uint32) (map[uint32]types.Card, error) {
 		if card != nil {
 			cards[card.CardNumber] = card.Clone()
 			lastFound = index
+			if n <= fewCards {
+				fmt.Printf("   ... %v  card %v in slot %v\n", id, card.CardNumber, index)
+			}
 		}
 	}
 	return cards, nil

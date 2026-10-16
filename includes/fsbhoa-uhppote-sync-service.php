@@ -317,11 +317,11 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                     fsbhoa_uhppote_cli_exec($device_id, sprintf('clear-time-profiles %s', $device_id));
                     // we are relying on the bulk update to do the job for cards.
                     // NOTE: we also need to clear the persistant_maps for time profile assignments.
-                    $wipe_out = fsbhoa_uhppote_cli_exec($device_id, sprintf('delete-all %s', $device_id));
-                    error_log("SYNC SERVICE: delete-all output for $friendly_name: " . trim(preg_replace('/\s+/', ' ', (string)$wipe_out)));
-                    // Settle delay for the flash sector erase. With only 1s, load-acl once found a
-                    // leftover card, kept it, and appended the rest after it out of order.
-                    sleep(4);
+                    // Runs delete-all until the controller reads empty, with the settle delay for the
+                    // flash erase. A leftover card makes the load keep it and append the rest after it.
+                    Fsbhoa_Uhppote_Bulk_Sync::wipe_cards($device_id, FSBHOA_UHPPOTE_CLI_CONFIG, function () use ($device_id) {
+                        return fsbhoa_uhppote_cli_exec($device_id, sprintf('delete-all %s', $device_id));
+                    }, 'SYNC SERVICE');
                 } else {
                     error_log("DRY RUN: Would execute clear-time-profiles and delete-cards on " . $device_id);
                 }

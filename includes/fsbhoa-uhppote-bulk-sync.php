@@ -11,6 +11,9 @@ class Fsbhoa_Uhppote_Bulk_Sync {
     // `uhppote-cli load-acl` does, with paced requests, one check of each time profile, and an
     // immediate retry of a rejected card, and prints the same summary line. Since 2026-10-16.
     const LOADER = '/usr/local/bin/fsbhoa_load_acl';
+    const WIPE_TRIES  = 3;  // delete-all runs at most this many times until the controller reads empty
+    const WIPE_SETTLE = 4;  // seconds after delete-all for the flash erase. With 1s, load-acl once found a leftover card.
+    const COUNT_TIMEOUT = 60; // seconds for the card count check
 
     /**
      * Executes the bulk load-acl process for a single controller.
@@ -248,18 +251,68 @@ class Fsbhoa_Uhppote_Bulk_Sync {
      */
     private function wipe_controller_cards($device_id, $conf_path) {
         $wipe_cmd = sprintf('uhppote-cli --config %s delete-all %s 2>&1', escapeshellarg($conf_path), escapeshellarg($device_id));
+        self::wipe_cards($device_id, $conf_path, function () use ($wipe_cmd) {
+            return shell_exec($wipe_cmd);
+        }, 'SYNC RECOVERY');
+    }
 
-        $wipe_out = shell_exec($wipe_cmd);
-        $clean_wipe = trim(preg_replace('/\s+/', ' ', (string)$wipe_out));
-        if (empty($clean_wipe) || strpos($clean_wipe, 'ERROR') !== false) {
-            error_log("SYNC RECOVERY WARNING: delete-all for {$device_id} may have failed: {$clean_wipe}");
-        } else {
-            error_log("SYNC RECOVERY: delete-all output for {$device_id}: {$clean_wipe}");
+    /**
+     * Runs delete-all, waits for the flash erase, and checks the controller is empty. `delete-all`
+     * sometimes leaves a card behind (2026-10-16 on .54, 8 s after it replied `true`). The next
+     * load then keeps that card and appends the rest after it, which costs a second wipe and a
+     * full reload; a second delete-all costs a few seconds. Tries up to WIPE_TRIES times.
+     * @param string   $conf_path  config listing this controller with its address (for the count check)
+     * @param callable $delete_all runs `delete-all` on this controller and returns its output
+     * @param string   $log_prefix start of each log line, such as 'SYNC RECOVERY'
+     * @return bool false if cards were still there after the last try. The load then goes ahead;
+     *              its own checks wipe and reload again if the table isn't in order.
+     */
+    public static function wipe_cards($device_id, $conf_path, callable $delete_all, $log_prefix) {
+        for ($try = 1; $try <= self::WIPE_TRIES; $try++) {
+            $clean_wipe = trim(preg_replace('/\s+/', ' ', (string)$delete_all()));
+            if (empty($clean_wipe) || strpos($clean_wipe, 'ERROR') !== false) {
+                error_log("{$log_prefix} WARNING: delete-all for {$device_id} may have failed: {$clean_wipe}");
+            } else {
+                error_log("{$log_prefix}: delete-all output for {$device_id}: {$clean_wipe}");
+            }
+
+            // Settle delay for the flash sector erase
+            error_log("{$log_prefix}: Pausing " . self::WIPE_SETTLE . " seconds for controller flash erase to settle...");
+            sleep(self::WIPE_SETTLE);
+
+            $left = self::count_cards($device_id, $conf_path, $log_prefix);
+            if ($left === null || $left === 0) {
+                return true; // empty, or couldn't be checked (count_cards logged why)
+            }
+            error_log("{$log_prefix} WARNING: {$left} card(s) still on {$device_id} after delete-all (try {$try}/" . self::WIPE_TRIES . ")"
+                . ($try < self::WIPE_TRIES ? '; wiping again.' : '; going ahead with the load.'));
         }
+        return false;
+    }
 
-        // Settle delay for the flash sector erase
-        error_log("SYNC RECOVERY: Pausing 4 seconds for controller flash erase to settle...");
-        sleep(4);
+    /**
+     * The number of cards on a controller, read with the card loader's --count, or null if it
+     * couldn't be read. If any are found, the loader's output (each card and its slot, when
+     * there are only a few) goes to the log.
+     */
+    public static function count_cards($device_id, $conf_path, $log_prefix) {
+        if (!is_executable(self::LOADER)) {
+            error_log("{$log_prefix}: " . self::LOADER . " is not installed; not checking that {$device_id} is empty.");
+            return null;
+        }
+        $cmd = sprintf('timeout %d %s --config %s --count %s 2>&1',
+            self::COUNT_TIMEOUT, escapeshellarg(self::LOADER), escapeshellarg($conf_path), escapeshellarg($device_id));
+        $lines = [];
+        exec($cmd, $lines, $exit_code);
+        $clean = trim(preg_replace('/\s+/', ' ', implode("\n", $lines)));
+        if ($exit_code !== 0 || !preg_match('/cards:(\d+)/', $clean, $m)) {
+            error_log("{$log_prefix} WARNING: could not read the card count of {$device_id} (exit {$exit_code}): {$clean}");
+            return null;
+        }
+        if ((int)$m[1] > 0) {
+            error_log("{$log_prefix}: card count of {$device_id}: {$clean}");
+        }
+        return (int)$m[1];
     }
 
     /**
