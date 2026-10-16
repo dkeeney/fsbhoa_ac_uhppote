@@ -357,11 +357,18 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                         error_log("DRY RUN (PROFILE): " . $command);
                     } else {
                         error_log("SYNC SERVICE (PROFILE): $command");
+                        // A write counts only once it reads back as written: the cards that point
+                        // at this profile would otherwise be denied at those doors.
                         $success = false;
                         for ($i = 0; $i < $retry_attempts; $i++) {
                             $output = fsbhoa_uhppote_cli_exec($device_id, $args);
                             if (strpos($output, 'false') === false && strpos($output, 'ERROR') === false) {
-                                $success = true; break;
+                                usleep(200000); // pace requests: back-to-back requests get wrong replies
+                                if (fsbhoa_uhppote_profile_is_current($device_id, $profile_id, '2020-01-01:2099-12-31', $weekdays, $parts[1], $linked_profile_id)) {
+                                    $success = true; break;
+                                }
+                                $output = "written, but reads back different";
+                                error_log("SYNC WARNING (PROFILE $profile_id) for $friendly_name: $output (attempt " . ($i + 1) . "/$retry_attempts).");
                             }
                             usleep($retry_wait);
                         }

@@ -7,6 +7,10 @@ if ( ! defined( 'WPINC' ) ) { die; }
  */
 class Fsbhoa_Uhppote_Bulk_Sync {
     const LOAD_ACL_TIMEOUT = 300; // seconds; a full reload of ~800 cards takes far less
+    // Our card loader (acl_loader/, built and installed by build.sh). It does what
+    // `uhppote-cli load-acl` does, with paced requests, one check of each time profile, and an
+    // immediate retry of a rejected card, and prints the same summary line. Since 2026-10-16.
+    const LOADER = '/usr/local/bin/fsbhoa_load_acl';
 
     /**
      * Executes the bulk load-acl process for a single controller.
@@ -122,13 +126,19 @@ class Fsbhoa_Uhppote_Bulk_Sync {
         fclose($tsv_handle);
 
         // 4. Execute the Bulk Upload
-        // We pass the explicit config file and strict mode
+        // We pass the explicit config file. Our loader if installed, else uhppote-cli load-acl.
         // Time limit: if the controller gives a wrong card count (seen when requests come too fast),
         // load-acl scans card slots without end, which would hang the sync and leave its lock behind.
+        if (is_executable(self::LOADER)) {
+            $loader = escapeshellarg(self::LOADER) . ' --config ' . escapeshellarg($conf_path);
+        } else {
+            error_log("SYNC WARNING (BULK ACL): " . self::LOADER . " is not installed (run build.sh install); using uhppote-cli load-acl.");
+            $loader = 'uhppote-cli --config ' . escapeshellarg($conf_path) . ' load-acl';
+        }
         $bulk_command = sprintf(
-            'timeout %d uhppote-cli --config %s load-acl %s 2>&1',
+            'timeout %d %s %s 2>&1',
             self::LOAD_ACL_TIMEOUT,
-            escapeshellarg($conf_path), 
+            $loader,
             escapeshellarg($tsv_path)
         );
         

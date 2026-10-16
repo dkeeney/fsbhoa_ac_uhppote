@@ -59,13 +59,18 @@ It works in two steps:
 
 ## Loading cards onto controllers
 
-`includes/fsbhoa-uhppote-bulk-sync.php` writes the card and profile list to each controller with `uhppote-cli load-acl`, using a TSV file that has one column per door (`N`, `Y`, or a profile number).
+`includes/fsbhoa-uhppote-bulk-sync.php` writes the card list to each controller with our card loader `fsbhoa_load_acl` (`acl_loader/`, built and installed by `build.sh`), using a TSV file that has one column per door (`N`, `Y`, or a profile number). If the binary isn't installed it falls back to `uhppote-cli load-acl`, with a warning in the log.
 
-- `load-acl` reads the cards already on the controller and writes only the ones that differ. This keeps NVRAM (flash) writes to a minimum, so don't replace it with anything that rewrites every card.
-- **The card table must stay sorted.** The controller finds a card with a binary search, but `load-acl` appends new cards to the end of the table. A card out of order is stored (`get-cards` lists it) but can't be found: `get-card` says `NO RECORD` and the swipe is denied. This hit about 60 cards at production's South Gate (fixed on the V1 `v1-production` branch of core, 2026-10-09). So:
+- **The loader** (since 2026-10-16) takes the same arguments and TSV as `uhppote-cli load-acl`, does the same diff and prints the same summary line, so the checks below work for either. It reads the cards already on the controller and writes only the ones that differ. This keeps NVRAM (flash) writes to a minimum, so don't replace it with anything that rewrites every card. What it does differently, because `load-acl` sends its requests back to back:
+  - It pauses 25 ms after each request (`--pace`).
+  - It checks each time profile the list uses once, before writing any card. `load-acl` checked each card's profile right after writing the previous card, and a rejected write was sometimes followed by an empty reply, read as "time profile 2 is not defined" (2 because most cards have profile 2 on door 1). That failed the load and cost a wipe and reload, sometimes two.
+  - It retries a card write the controller rejects at once, logging `RETRY card <n> (rejected; attempt 2/3)`. The cards after it haven't been written yet, so the retry still lands in order. On the testbed this happens about once per full load of 763 cards. The line leaves out the error text on purpose: words such as `ERROR` or `invalid BCD` anywhere in the output fail the load.
+  - It reads the card count until two reads agree, and reads an empty slot a second time if it's within the count (an occupied slot sometimes reads as empty). Empty slots past the last card and slots of deleted cards look the same, so it gives up after 1,000 empty slots in a row past the count, rather than scanning all 100,000 (about 45 minutes). A missed slot is most likely why `load-acl` used to "scan card slots without end": it never reached the count.
+  - It refuses a controller without an address in its config instead of broadcasting.
+- **The card table must stay sorted.** The controller finds a card with a binary search, but a load (ours or `load-acl`) appends new cards to the end of the table. A card out of order is stored (`get-cards` lists it) but can't be found: `get-card` says `NO RECORD` and the swipe is denied. This hit about 60 cards at production's South Gate (fixed on the V1 `v1-production` branch of core, 2026-10-09). So:
   - TSV rows are written in ascending card-number order.
   - **If a load adds or deletes cards in a table that already had cards** (`unchanged` > 0 and `added` or `deleted` > 0), the code wipes the controller and loads again, so the table is rebuilt in order. Changed permissions on existing cards (`updated`) don't need this.
-- **If `load-acl` reports an error, times out, or doesn't print its summary line** (`unchanged: updated: added: deleted: failed: errors:`), the code runs `uhppote-cli delete-all` to wipe every card on the controller, waits 4 seconds for the flash erase to finish, and runs `load-acl` again. It tries up to 3 times. The wipe clears any corruption in the controller's memory and any cards an interrupted load appended out of order.
+- **If the load reports an error, times out, or doesn't print its summary line** (`unchanged: updated: added: deleted: failed: errors:`), the code runs `uhppote-cli delete-all` to wipe every card on the controller, waits 4 seconds for the flash erase to finish, and loads again. It tries up to 3 times. The wipe clears any corruption in the controller's memory and any cards an interrupted load appended out of order.
 - `delete-all` runs only between attempts, never before the first one, to protect the flash.
 - **To check the controllers**, use the Hardware Controller Audit on the Diagnostics page (`class-fsbhoa-uhppote-diagnostics.php`). It compares each controller's cards (dates and per-door setting) and time profiles with a dry run of the compiler, using `Fsbhoa_Uhppote_Bulk_Sync::build_card_row()` so it expects exactly what the sync sends. It can also look up every card by number on one chosen controller (about 2 minutes), which is the only way to find cards stored out of order: `get-cards` still lists them.
 
@@ -116,7 +121,7 @@ They are loaded with `clear-task-list` and `refresh-task-list` (`fsbhoa_execute_
   - Run commands with `fsbhoa_uhppote_cli_exec( $device_id, $args, $options )` and build log lines with `fsbhoa_uhppote_cli_command()` (`includes/fsbhoa-uhppote-cli.php`). Never call `shell_exec('uhppote-cli ...')` directly.
   - The config is `/var/lib/fsbhoa/uhppoted.conf`, written by `fsbhoa_uhppote_write_cli_config()` whenever `controllers.json` is regenerated or the Event Service settings are saved. It lists only UHPPOTE controllers that have an IP address.
   - The helper fails closed: a controller missing from the config is refused (output starts with `ERROR:`), because `uhppote-cli` would otherwise broadcast the command.
-  - Exceptions: `load-acl` and its retry `delete-all` (bulk sync) and the diagnostics audit write their own per-controller configs and also pass `--config`.
+  - Exceptions: the card loader and its retry `delete-all` (bulk sync) and the diagnostics audit write their own per-controller configs and also pass `--config`. The loader refuses a controller the config gives no address.
 - Shared NAS files are kept apart by the `FSBHOA_AC_ENVIRONMENT` constant (see ARCHITECTURE.md). This plugin doesn't check that constant yet.
 
 ### Setting up a new controller
@@ -133,14 +138,14 @@ The code itself only sends `set-address` to a controller that already has an add
 
 ## Build and deploy
 
-- Build the Go services with `build.sh`.
+- Build the Go programs with `build.sh`: the event service (`fsbhoa_events`) and the card loader (`fsbhoa_load_acl`). `build.sh install` copies both to `/usr/local/bin` and restarts the event service.
 - No full deployment script exists yet. One will be written once the testbed is working.
 
 ## Pitfalls
 
 - **Flash wear.** Writes to controller NVRAM wear the flash. Write only what has changed, and wipe only on recovery or when forced.
 - **Memory corruption.** A controller's card memory can become corrupted. The fix is to wipe and reload (see "Loading cards onto controllers").
-- **Pace requests to a controller.** Back-to-back `uhppote-cli` requests can get wrong replies (seen: a profile read as missing, and a wrong card count that made `load-acl` scan card slots without end). Pause 100–200 ms after each request, as the sync does.
-- **Read before writing** where the controller allows it: the sync reads back time profiles and door delays and writes only differences. Task lists can't be read back; the sync keeps a fingerprint of the last list sent (option `fsbhoa_task_list_hashes`) and re-sends only when it changes, plus on every nightly sync and Force Full Rebuild.
-- **UDP timeouts and dropped packets.** Controller replies can be lost or garbled. The `load-acl` error check looks for `invalid BCD` and `invalid MsgType`.
+- **Pace requests to a controller.** Back-to-back requests can get wrong replies, mostly empty ones, right after a write: a profile read as missing, an occupied card slot read as empty (which made `load-acl` scan card slots without end), a card write rejected. Reads alone are reliable: 1,500 back-to-back profile reads gave no errors (2026-10-16). Pause 100–200 ms after each `uhppote-cli` request, as the sync does; the card loader pauses 25 ms and retries.
+- **Read before writing** where the controller allows it: the sync reads back time profiles and door delays and writes only differences. **And read after writing** a time profile: the sync writes it again until it reads back as written (3 tries, then the controller fails), since cards pointing at a wrong profile are denied at those doors. Task lists can't be read back; the sync keeps a fingerprint of the last list sent (option `fsbhoa_task_list_hashes`) and re-sends only when it changes, plus on every nightly sync and Force Full Rebuild.
+- **UDP timeouts and dropped packets.** Controller replies can be lost or garbled. The card load's error check looks for `invalid BCD` and `invalid MsgType`.
 - **Door numbering.** Door numbers (`door_number_on_controller`) must match the physical ports on the controller.
