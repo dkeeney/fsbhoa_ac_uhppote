@@ -218,16 +218,20 @@ class Fsbhoa_Uhppote_Bulk_Sync {
 
                 $clean_output = trim(preg_replace('/\s+/', ' ', (string)$output));
 
-                // Did this load insert/remove cards in a table that already had cards?
-                // If so the new cards were appended out of order -> rebuild the table.
+                // Did this load change a table that already had cards? Added cards are appended at
+                // the end, a changed card is moved to the end (its old slot marked deleted), and a
+                // deleted card leaves its slot marked deleted -> rebuild the table in order.
+                // Only a full load into an empty table needs nothing more.
                 if (!$wiped_this_run && $attempt < 3
-                    && preg_match('/unchanged:\s*(\d+).*?added:\s*(\d+)\s+deleted:\s*(\d+)/', $output, $counts)) {
+                    && preg_match('/unchanged:\s*(\d+)\s+updated:\s*(\d+)\s+added:\s*(\d+)\s+deleted:\s*(\d+)/', $output, $counts)) {
                     $unchanged = (int)$counts[1];
-                    $added     = (int)$counts[2];
-                    $deleted   = (int)$counts[3];
+                    $updated   = (int)$counts[2];
+                    $added     = (int)$counts[3];
+                    $deleted   = (int)$counts[4];
+                    $had_cards = $unchanged > 0 || $updated > 0 || $deleted > 0;
 
-                    if ($unchanged > 0 && ($added > 0 || $deleted > 0)) {
-                        error_log("SYNC RESORT: load-acl for {$device_id} added {$added} / deleted {$deleted} cards in a populated table ({$clean_output}). Wiping and reloading to keep the card table sorted...");
+                    if ($had_cards && ($added > 0 || $updated > 0 || $deleted > 0)) {
+                        error_log("SYNC RESORT: load-acl for {$device_id} added {$added} / updated {$updated} / deleted {$deleted} cards in a populated table ({$clean_output}). Wiping and reloading to keep the card table sorted...");
                         $needs_wipe = true;
                         continue; // Loop back, wipe, and reload in sorted order
                     }
