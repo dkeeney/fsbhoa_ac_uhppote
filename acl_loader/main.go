@@ -15,7 +15,7 @@
 //   - It only talks to controllers by the address in the config. A controller without one
 //     is refused (uhppote-cli would broadcast).
 //
-// Usage: fsbhoa_load_acl --config <conf> [--pace 25ms] [--timeout 2.5s] <TSV file>
+// Usage: fsbhoa_load_acl --config <conf> [--pace 5ms] [--timeout 2.5s] <TSV file>
 package main
 
 import (
@@ -45,13 +45,13 @@ var pace time.Duration
 
 func main() {
 	confPath := flag.String("config", "", "uhppote config file (required): the controllers, their addresses and door names")
-	flag.DurationVar(&pace, "pace", 25*time.Millisecond, "pause after each request to a controller")
+	flag.DurationVar(&pace, "pace", 5*time.Millisecond, "pause after each request to a controller")
 	timeout := flag.Duration("timeout", 2500*time.Millisecond, "how long to wait for each reply")
 	debug := flag.Bool("debug", false, "print every request and reply")
 	flag.Parse()
 
 	if *confPath == "" || flag.NArg() != 1 {
-		fail(fmt.Errorf("usage: fsbhoa_load_acl --config <conf> [--pace 25ms] [--timeout 2.5s] <TSV file>"))
+		fail(fmt.Errorf("usage: fsbhoa_load_acl --config <conf> [--pace 5ms] [--timeout 2.5s] <TSV file>"))
 	}
 
 	conf := config.NewConfig()
