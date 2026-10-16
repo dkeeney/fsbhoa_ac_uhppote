@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/uhppoted/uhppote-core/types"
+	"github.com/uhppoted/uhppote-core/uhppote"
 )
 
 // EventMonitor implements the uhppote-core.EventListener interface.
 type EventMonitor struct {
 	hub *Hub
+	u   uhppote.IUHPPOTE // for the denial check (denial_check.go)
 }
 
 // OnEvent is the callback function that gets executed when a controller sends an event.
@@ -75,6 +77,10 @@ func (m *EventMonitor) OnEvent(status *types.Status) {
 	// Logging it also notifies the monitor.
 	enqueueEvent(rawEvent, eventMessage)
 
+	// "No access rights": look the card up on the controller and log what it holds (TODO #28)
+	if event.Reason == denialReason && !event.Granted && m.u != nil {
+		go checkDeniedCard(m.u, uint32(status.SerialNumber), event.CardNumber, event.Door)
+	}
 }
 
 

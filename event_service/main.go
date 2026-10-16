@@ -73,7 +73,7 @@ func main() {
 
 	// 4. Start All Background Services (Goroutines)
 	hub := newHub(u)
-	listener := EventMonitor{hub: hub}
+	listener := EventMonitor{hub: hub, u: u}
 	errors := make(chan error, 4)
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)

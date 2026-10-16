@@ -16,6 +16,9 @@
 //     is refused (uhppote-cli would broadcast).
 //   - When a controller holds only a few cards (fewCards), each one is printed with its slot.
 //     That shows which card a `delete-all` left behind.
+//   - For TODO #28 (valid cards sometimes denied until a later sync), it prints the layout of the
+//     card table it read before writing (gaps left by deleted cards, cards out of order) and the
+//     numbers of the cards it adds, updates and deletes.
 //
 // With --count it writes nothing: it prints one controller's card count (`cards:N`) and lists
 // the cards if there are only a few. The bulk sync uses it to check that a `delete-all` emptied
@@ -49,6 +52,7 @@ const (
 	confirmPast = 10                     // empty slots up to this far past the count are read twice
 	maxWarns    = 5                      // warnings printed, like load-acl
 	fewCards    = 10                     // a controller with this many cards or fewer has each one printed
+	maxListed   = 20                     // card numbers printed per kind of change
 )
 
 var pace time.Duration
@@ -167,7 +171,7 @@ func count(u uhppote.IUHPPOTE, devices []uhppote.Device, id uint32, confPath str
 	}
 	fmt.Printf("   ... %v  cards:%v\n", id, n)
 	if n > 0 && n <= fewCards {
-		if _, err := readCards(u, id); err != nil {
+		if _, _, err := readCards(u, id); err != nil {
 			fmt.Printf("   ... %v  could not list them: %v\n", id, err)
 		}
 	}
@@ -185,10 +189,12 @@ func load(u uhppote.IUHPPOTE, id uint32, wanted map[uint32]types.Card) (*report,
 		return nil, err
 	}
 
-	current, err := readCards(u, id)
+	current, lo, err := readCards(u, id)
 	if err != nil {
 		return nil, err
 	}
+	fmt.Printf("   ... %v  table before the load: %v cards, last slot %v, %v gaps (deleted or empty slots), %v out of order%v\n",
+		id, len(current), lo.last, lo.gaps, lo.outOfOrder, lo.sortedText())
 
 	diffs, err := acl.Compare(acl.ACL{id: current}, acl.ACL{id: wanted})
 	if err != nil {
@@ -231,6 +237,25 @@ func load(u uhppote.IUHPPOTE, id uint32, wanted map[uint32]types.Card) (*report,
 			r.added++
 		}
 	}
+	listCards := func(cards []types.Card) string {
+		s := ""
+		for i, c := range cards {
+			if i == maxListed {
+				return s + fmt.Sprintf(" (+%v more)", len(cards)-maxListed)
+			}
+			s += fmt.Sprintf(" %v", c.CardNumber)
+		}
+		return s
+	}
+	switch {
+	case len(diff.Added)+len(diff.Updated)+len(diff.Deleted) == 0:
+	case len(diff.Unchanged) == 0 && len(diff.Updated) == 0 && len(diff.Deleted) == 0:
+		fmt.Printf("   ... %v  changes: all %v cards added (full load)\n", id, len(diff.Added))
+	default:
+		fmt.Printf("   ... %v  changes: added%v | updated%v | deleted%v\n", id,
+			listCards(diff.Added), listCards(diff.Updated), listCards(diff.Deleted))
+	}
+
 	for _, card := range diff.Deleted {
 		done, err := retry(fmt.Sprintf("delete card %v", card.CardNumber), func() (bool, error) {
 			return u.DeleteCard(id, card.CardNumber)
@@ -311,22 +336,37 @@ func readCount(u uhppote.IUHPPOTE, id uint32) (uint32, error) {
 	return n, nil
 }
 
+// layout describes the card table as read: the last occupied slot, the empty slots before it
+// (a deleted card's slot stays empty until the next delete-all), and the cards whose number is
+// lower than a card in an earlier slot (a load appends new cards at the end).
+type layout struct {
+	last, gaps, outOfOrder, sortedUntil uint32
+}
+
+func (lo layout) sortedText() string {
+	if lo.outOfOrder == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (in order through slot %v)", lo.sortedUntil)
+}
+
 // readCards reads every card on the controller. If there are only a few (fewCards), each is
 // printed with its slot.
-func readCards(u uhppote.IUHPPOTE, id uint32) (map[uint32]types.Card, error) {
+func readCards(u uhppote.IUHPPOTE, id uint32) (map[uint32]types.Card, layout, error) {
+	lo := layout{}
 	n, err := readCount(u, id)
 	if err != nil {
-		return nil, err
+		return nil, lo, err
 	}
 
 	// Slots past the last card and slots of deleted cards both read as empty, so a count that
 	// is too high would scan every slot (maxSlots, about 45 minutes). Give up once maxEmpty
 	// slots in a row past the count are empty; the bulk sync then wipes and reloads.
 	cards := map[uint32]types.Card{}
-	lastFound := uint32(0)
+	lastFound, highest := uint32(0), uint32(0)
 	for index := uint32(1); uint32(len(cards)) < n; index++ {
 		if index > maxSlots || (index > n && index-lastFound > maxEmpty) {
-			return nil, fmt.Errorf("found only %v of the %v cards the controller reports (read up to slot %v)", len(cards), n, index-1)
+			return nil, lo, fmt.Errorf("found only %v of the %v cards the controller reports (read up to slot %v)", len(cards), n, index-1)
 		}
 		card, err := readSlot(u, id, index)
 		// An occupied slot sometimes reads as empty (2026-10-16: 762 of 763 cards found on a
@@ -337,17 +377,25 @@ func readCards(u uhppote.IUHPPOTE, id uint32) (map[uint32]types.Card, error) {
 			card, err = readSlot(u, id, index)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("could not read card slot %v: %v", index, err)
+			return nil, lo, fmt.Errorf("could not read card slot %v: %v", index, err)
 		}
 		if card != nil {
 			cards[card.CardNumber] = card.Clone()
+			if card.CardNumber < highest {
+				if lo.outOfOrder == 0 {
+					lo.sortedUntil = lastFound
+				}
+				lo.outOfOrder++
+			}
+			highest = max(highest, card.CardNumber)
 			lastFound = index
 			if n <= fewCards {
 				fmt.Printf("   ... %v  card %v in slot %v\n", id, card.CardNumber, index)
 			}
 		}
 	}
-	return cards, nil
+	lo.last, lo.gaps = lastFound, lastFound-uint32(len(cards))
+	return cards, lo, nil
 }
 
 // readSlot reads one card slot, trying again if the reply is missing or garbled.
