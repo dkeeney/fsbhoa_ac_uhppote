@@ -310,8 +310,17 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                 }
             }
 
+            // A wipe leaves the controller empty until the load finishes, so only a controller that
+            // answers reliably is wiped. One that fails the check still gets the time profiles
+            // (read first, as in a delta sync) and every card that differs, so a new (holiday)
+            // schedule takes effect, and it keeps its old cards if that load fails.
+            $allow_wipe = true;
+            if ($wipe_memory && !$is_dry_run) {
+                $allow_wipe = Fsbhoa_Uhppote_Bulk_Sync::is_healthy($device_id, 'SYNC SERVICE');
+            }
+
             // --- STEP 3: WIPE MEMORY (Only on Nightly or Manual Full Sync) ---
-            if ($wipe_memory) {
+            if ($wipe_memory && $allow_wipe) {
                 error_log("SYNC SERVICE: Wiping card & profile memory on $friendly_name...");
                 if (!$is_dry_run) {
                     fsbhoa_uhppote_cli_exec($device_id, sprintf('clear-time-profiles %s', $device_id));
@@ -339,8 +348,8 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                     $spans_string = "'" . $parts[1] . "'";
                     $linked_profile_id = intval($data['link']);
 
-                    if (!$wipe_memory) {
-                        $is_current = fsbhoa_uhppote_profile_is_current($device_id, $profile_id, '2020-01-01:2099-12-31', $weekdays, $parts[1], $linked_profile_id);
+                    if (!$wipe_memory || !$allow_wipe) {
+                        $is_current =fsbhoa_uhppote_profile_is_current($device_id, $profile_id, '2020-01-01:2099-12-31', $weekdays, $parts[1], $linked_profile_id);
                         usleep(200000); // pace requests: back-to-back requests get wrong replies
                         if ($is_current) {
                             $profiles_unchanged++;
@@ -439,7 +448,8 @@ function fsbhoa_execute_sync_logic($controllers, $permission_data, $cardholders_
                 $controller->controller_record_id,
                 $cardholders_to_sync,
                 $global_card_perms,
-                $is_dry_run
+                $is_dry_run,
+                $allow_wipe
             );
 
             if (!$bulk_success) {

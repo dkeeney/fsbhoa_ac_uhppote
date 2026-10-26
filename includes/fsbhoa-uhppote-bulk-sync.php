@@ -14,11 +14,18 @@ class Fsbhoa_Uhppote_Bulk_Sync {
     const WIPE_TRIES  = 3;  // delete-all runs at most this many times until the controller reads empty
     const WIPE_SETTLE = 4;  // seconds after delete-all for the flash erase. With 1s, load-acl once found a leftover card.
     const COUNT_TIMEOUT = 60; // seconds for the card count check
+    // Status reads in the health check before a wipe. Normally a controller loses about 1 reply in
+    // 40,000; production's Lodge B lost 1 in 5 on 2026-10-26, which 30 reads catch.
+    const HEALTH_READS = 30;
 
     /**
      * Executes the bulk load-acl process for a single controller.
+     * @param bool $allow_wipe false once the controller has failed the health check (the sync checks
+     *                         before its own wipe). Otherwise the check runs before the first wipe here.
+     *                         A controller that fails it is never wiped: a failed attempt is retried
+     *                         without the recovery wipe, and a table left out of order isn't re-sorted.
      */
-    public function execute_bulk_load($device_id, $controller_record_id, $cardholders_to_sync, $global_card_perms, $is_dry_run) {
+    public function execute_bulk_load($device_id, $controller_record_id, $cardholders_to_sync, $global_card_perms, $is_dry_run, $allow_wipe = true) {
         global $wpdb;
 
         $controller_ip = fsbhoa_get_controller_ip($device_id);
@@ -159,6 +166,15 @@ class Fsbhoa_Uhppote_Bulk_Sync {
             // as delete-all + full load-acl so the table is rebuilt in sorted order.
             $needs_wipe = false;
             $wiped_this_run = false;
+            // A wipe leaves the controller empty until a load succeeds, so only a controller that
+            // answers reliably is wiped (checked once, before the first wipe this load would make).
+            $healthy = $allow_wipe ? null : false;
+            $may_wipe = function () use (&$healthy, $device_id) {
+                if ($healthy === null) {
+                    $healthy = self::is_healthy($device_id, 'SYNC RECOVERY');
+                }
+                return $healthy;
+            };
             for ($attempt = 1; $attempt <= 3; $attempt++) {
                 if ($needs_wipe) {
                     $this->wipe_controller_cards($device_id, $conf_path);
@@ -177,7 +193,7 @@ class Fsbhoa_Uhppote_Bulk_Sync {
                     error_log("SYNC WARNING: Bulk ACL attempt {$attempt}/3 for {$device_id} timed out after " . self::LOAD_ACL_TIMEOUT . "s.");
                     if ($attempt < 3) {
                         sleep(2);
-                        $needs_wipe = true;
+                        $needs_wipe = $may_wipe();
                         continue;
                     }
                     error_log("SYNC FATAL (BULK ACL): Timed out 3 times for {$device_id}.");
@@ -203,7 +219,12 @@ class Fsbhoa_Uhppote_Bulk_Sync {
                     $clean_output = trim(preg_replace('/\s+/', ' ', (string)$output));
                     error_log("SYNC WARNING: Bulk ACL attempt {$attempt}/3 for {$device_id} had issues: {$clean_output}");
 
-                    if ($attempt < 3) {
+                    if ($attempt < 3 && !$may_wipe()) {
+                        // The loader writes only what differs, so a retry picks up where this one stopped.
+                        error_log("SYNC RECOVERY: load-acl failed on {$device_id}, which failed the health check. Retrying without a wipe (attempt " . ($attempt + 1) . ")...");
+                        sleep(self::WIPE_SETTLE);
+                        continue;
+                    } elseif ($attempt < 3) {
                         // RECOVERY ONLY: First pass failed. To protect flash endurance,
                         // delete-all is only executed before retry attempts (attempts 2 and 3).
                         error_log("SYNC RECOVERY: load-acl failed. Wiping controller {$device_id} memory before attempt " . ($attempt + 1) . "...");
@@ -230,7 +251,9 @@ class Fsbhoa_Uhppote_Bulk_Sync {
                     $deleted   = (int)$counts[4];
                     $had_cards = $unchanged > 0 || $updated > 0 || $deleted > 0;
 
-                    if ($had_cards && ($added > 0 || $updated > 0 || $deleted > 0)) {
+                    if ($had_cards && ($added > 0 || $updated > 0 || $deleted > 0) && !$may_wipe()) {
+                        error_log("SYNC RESORT SKIPPED: {$device_id} failed the health check, so its card table is left as loaded (added {$added} / updated {$updated} / deleted {$deleted}). The next sync that changes cards on a healthy controller rebuilds it in order.");
+                    } elseif ($had_cards && ($added > 0 || $updated > 0 || $deleted > 0)) {
                         error_log("SYNC RESORT: load-acl for {$device_id} added {$added} / updated {$updated} / deleted {$deleted} cards in a populated table ({$clean_output}). Wiping and reloading to keep the card table sorted...");
                         $needs_wipe = true;
                         continue; // Loop back, wipe, and reload in sorted order
@@ -253,6 +276,29 @@ class Fsbhoa_Uhppote_Bulk_Sync {
      * Uses the same per-controller config as load-acl: it holds this controller's explicit IP,
      * which prevents UDP broadcast misses if the controller network stack is unresponsive.
      */
+    /**
+     * Whether a controller answers reliably enough to be wiped: HEALTH_READS status requests, none
+     * of them lost. On 2026-10-26 production's Lodge B lost about 1 in 5 replies from 00:01 until it
+     * was power cycled; the nightly wiped it, could not reload it, and every badge was refused
+     * there for 8 hours. A controller that fails is logged and left with the cards it has.
+     * @param string $log_prefix start of the log line, such as 'SYNC SERVICE'
+     */
+    public static function is_healthy($device_id, $log_prefix) {
+        $lost = 0;
+        for ($i = 0; $i < self::HEALTH_READS; $i++) {
+            $output = fsbhoa_uhppote_cli_exec($device_id, sprintf('get-status %s', $device_id), '--timeout 1s');
+            if (trim($output) === '' || strpos($output, 'ERROR') !== false) {
+                $lost++;
+            }
+            usleep(100000); // pace requests: back-to-back requests get wrong replies
+        }
+        if ($lost > 0) {
+            error_log("{$log_prefix} HEALTH WARNING: {$device_id} lost {$lost} of " . self::HEALTH_READS . " status replies. Not wiping it: it keeps its cards, and only the cards that differ are written. Check the controller (a power cycle cleared this on 2026-10-26).");
+            return false;
+        }
+        return true;
+    }
+
     private function wipe_controller_cards($device_id, $conf_path) {
         $wipe_cmd = sprintf('uhppote-cli --config %s delete-all %s 2>&1', escapeshellarg($conf_path), escapeshellarg($device_id));
         self::wipe_cards($device_id, $conf_path, function () use ($wipe_cmd) {
