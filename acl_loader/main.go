@@ -314,15 +314,27 @@ func checkProfiles(u uhppote.IUHPPOTE, id uint32, wanted map[uint32]types.Card) 
 }
 
 // readCount reads the card count until two reads agree: a wrong count (seen when requests
-// came too fast) made load-acl scan without end.
+// came too fast) made load-acl scan without end. A read with no reply is tried again, like a
+// slot read: on 2026-10-26 one timeout per attempt failed all three attempts of the nightly
+// load on production's Lodge B, which the nightly had already wiped.
 func readCount(u uhppote.IUHPPOTE, id uint32) (uint32, error) {
 	var n uint32
 	agreed := false
 	for i := 0; i < attempts+1 && !agreed; i++ {
 		var counts [2]uint32
 		for j := range counts {
-			c, err := u.GetCards(id)
-			time.Sleep(pace)
+			var c uint32
+			var err error
+			for k := 0; k < attempts; k++ {
+				if k > 0 {
+					time.Sleep(retryPause)
+				}
+				c, err = u.GetCards(id)
+				time.Sleep(pace)
+				if err == nil {
+					break
+				}
+			}
 			if err != nil {
 				return 0, fmt.Errorf("could not read the card count: %v", err)
 			}
